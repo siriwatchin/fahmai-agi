@@ -56,6 +56,34 @@ Agent helpers:
 - `call_tool(name, arguments)`
 - `build_default_registry()`
 
+Hackathon domain tools live in `domain_tools.py`.
+
+These are FahMai-specific tools for common competition patterns:
+
+- `domain_profile_table`: table profile, columns, row count, date ranges, numeric stats.
+- `domain_date_range`: min/max date of a fact/dim table.
+- `domain_file_catalog_search`: find corpus files by exact path/name keyword.
+- `domain_text_exact_search`: exact string search in local corpus files.
+- `domain_hybrid_search`: Qdrant semantic search plus local exact search.
+- `domain_evidence_pack`: one-shot schema + file + retrieval + injection evidence bundle.
+- `domain_policy_resolver`: resolve active `DIM_POLICY_VERSION` row at a date.
+- `domain_entity_resolver`: map text/name/id to product/vendor/customer/employee/branch.
+- `domain_prompt_injection_detector`: detect override/admin/copy-verbatim injection patterns.
+- `domain_refusal_checker`: verify refusal has verb + topic + data-scope marker.
+- `domain_answer_verifier`: catch bad refusal shape, Chinese leakage, injection failures.
+- `domain_top_sku_by_units`: top SKU by units for a year.
+- `domain_top_sku_by_revenue`: top SKU by line revenue.
+- `domain_shipping_vendor_share`: shipping vendor count/share.
+- `domain_customer_loyalty_counts`: customer count by loyalty tier.
+- `domain_partner_brand_vendors`: partner-brand vendors.
+- `domain_stockout_top_sku`: top stockout SKU by year.
+- `domain_current_ceo`: active CEO at an as-of date.
+- `domain_duplicate_vendor_invoice`: duplicate vendor invoice rows.
+- `domain_recall_window`: recall state transitions for a SKU.
+- `domain_return_refund_reconciliation`: return/refund mismatch summary.
+- `domain_pos_log_schema_summary`: local POS TSV schema variants and BKK-CTW sanity figures.
+- `domain_validate_submission`: validate final Kaggle submission shape.
+
 ## Example
 
 ```python
@@ -78,6 +106,28 @@ print(registry.call_tool("postgres_execute_readonly_sql", {
 print(registry.call_tool("qdrant_search", {
     "query": "refund signing authority ladder current version",
     "top_k": 5
+}))
+```
+
+Domain tool example:
+
+```python
+from domain_tools import build_domain_registry
+
+registry = build_domain_registry(include_qdrant=True)
+
+print(registry.call_tool("domain_policy_resolver", {
+    "policy_variable": "point_earning_rate_per_thb",
+    "as_of_date": "2025-03-31"
+}))
+
+print(registry.call_tool("domain_entity_resolver", {
+    "query": "NovaTech laptop",
+    "entity_type": "product"
+}))
+
+print(registry.call_tool("domain_evidence_pack", {
+    "question": "ใครเป็น CEO ของ FahMai ในเดือนพฤษภาคม 2025"
 }))
 ```
 
@@ -115,3 +165,28 @@ Do not create separate vector collections per model unless the embedding model o
 - Identifier-based helper tools validate table/column names.
 - Free-form SQL should be used only by trusted agent code after planning/validation.
 - Credentials are never hardcoded in this package.
+
+## Tool Selection Guide
+
+Use Postgres generic tools for:
+
+- exact counts
+- sums/averages/max
+- table joins
+- time series
+- row-level reconciliation
+
+Use Qdrant/vector tools for:
+
+- policy/memo/chat/report retrieval
+- semantic search
+- prompt-injection evidence
+- refusal confirmation
+
+Use domain tools for:
+
+- recurring FahMai business questions
+- temporal policy lookup
+- entity resolution
+- answer/refusal verification
+- submission QA
