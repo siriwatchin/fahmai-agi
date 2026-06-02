@@ -65,3 +65,4 @@ Outputs:
 - Qdrant is used for document snippets, logs, memos, refusal evidence, and schema-ish text.
 - `BAAI/bge-m3` is the required vector embedding/search model only. It is separate from the Qwen generation model.
 - The LLM is used as a final synthesizer, not as the primary calculator.
+- Qwen runs with a FahMai system prompt that enforces context-first tool use. When `OBSERVATIONS` are already supplied by the pipeline, it switches to final-answer mode and returns a concise Thai answer instead of tool-call JSON.
