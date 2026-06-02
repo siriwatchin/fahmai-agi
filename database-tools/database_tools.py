@@ -278,11 +278,35 @@ class PostgresDatabaseTools:
 class QdrantDatabaseTools:
     def __init__(self, url: str, api_key: str | None, collection: str, embed_model: str):
         from qdrant_client import QdrantClient
-        from sentence_transformers import SentenceTransformer
 
         self.collection = collection
-        self.client = QdrantClient(url=url, api_key=api_key)
-        self.encoder = SentenceTransformer(embed_model)
+        self.embed_model = embed_model
+        self._encoder = None
+        self.client = QdrantClient(url=url, api_key=api_key, timeout=15)
+
+    @property
+    def encoder(self):
+        if self._encoder is None:
+            from sentence_transformers import SentenceTransformer
+
+            self._encoder = SentenceTransformer(self.embed_model)
+        return self._encoder
+
+    def _query_points(self, collection_name: str, vector: list[float], limit: int):
+        if hasattr(self.client, "search"):
+            return self.client.search(
+                collection_name=collection_name,
+                query_vector=vector,
+                limit=limit,
+                with_payload=True,
+            )
+        response = self.client.query_points(
+            collection_name=collection_name,
+            query=vector,
+            limit=limit,
+            with_payload=True,
+        )
+        return response.points
 
     def healthcheck(self) -> str:
         try:
@@ -325,12 +349,7 @@ class QdrantDatabaseTools:
     def search(self, query: str, top_k: int = 8, collection: str | None = None) -> str:
         try:
             vector = self.encoder.encode([query], normalize_embeddings=True)[0].tolist()
-            hits = self.client.search(
-                collection_name=collection or self.collection,
-                query_vector=vector,
-                limit=top_k,
-                with_payload=True,
-            )
+            hits = self._query_points(collection or self.collection, vector, top_k)
             rows = []
             for h in hits:
                 payload = dict(h.payload or {})

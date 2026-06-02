@@ -18,8 +18,15 @@ class VectorSearchResult:
 class QdrantVectorTool:
     def __init__(self, url: str, api_key: str | None, collection: str, embed_model: str):
         self.collection = collection
-        self.client = QdrantClient(url=url, api_key=api_key)
-        self.encoder = SentenceTransformer(embed_model)
+        self.client = QdrantClient(url=url, api_key=api_key, timeout=15)
+        self.embed_model = embed_model
+        self._encoder = None
+
+    @property
+    def encoder(self):
+        if self._encoder is None:
+            self._encoder = SentenceTransformer(self.embed_model)
+        return self._encoder
 
     @property
     def dim(self) -> int:
@@ -51,13 +58,22 @@ class QdrantVectorTool:
         flt = None
         if source:
             flt = Filter(must=[FieldCondition(key="source", match=MatchValue(value=source))])
-        hits = self.client.search(
-            collection_name=self.collection,
-            query_vector=vector,
-            query_filter=flt,
-            limit=top_k,
-            with_payload=True,
-        )
+        if hasattr(self.client, "search"):
+            hits = self.client.search(
+                collection_name=self.collection,
+                query_vector=vector,
+                query_filter=flt,
+                limit=top_k,
+                with_payload=True,
+            )
+        else:
+            hits = self.client.query_points(
+                collection_name=self.collection,
+                query=vector,
+                query_filter=flt,
+                limit=top_k,
+                with_payload=True,
+            ).points
         out = []
         for h in hits:
             payload = dict(h.payload or {})
