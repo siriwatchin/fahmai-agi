@@ -413,6 +413,15 @@ def load_questions():
 
 
 def load_model():
+    if os.getenv("DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP", "1").lower() not in {"0", "false", "no"}:
+        try:
+            import transformers.modeling_utils as modeling_utils
+
+            if hasattr(modeling_utils, "caching_allocator_warmup"):
+                modeling_utils.caching_allocator_warmup = lambda *args, **kwargs: None
+                print("allocator_warmup: disabled", flush=True)
+        except Exception as e:
+            print("allocator_warmup_disable_error:", e, flush=True)
     tok = AutoTokenizer.from_pretrained(MODEL)
     model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map={"": 0})
     return tok, model
