@@ -253,6 +253,10 @@ class QdrantRetrievalTool:
 
             self.encoder = SentenceTransformer(self.embed_model)
 
+    def preload_encoder(self):
+        self._load_encoder()
+        return True
+
     def search(self, query, k=8):
         if not self.ok:
             return []
@@ -798,10 +802,37 @@ OBSERVATIONS:
     }
 
 
+def save_outputs(rows, debug, qdrant_retriever, run_t0):
+    result_df = pd.DataFrame(rows)
+    result_df.to_csv(WORK / "best_results.csv", index=False)
+    if len(result_df):
+        result_df[["id", "answer"]].rename(columns={"answer": "response"}).to_csv(WORK / "best_submission.csv", index=False)
+    (WORK / "best_debug.json").write_text(json.dumps(debug, ensure_ascii=False, indent=2, default=str))
+
+    token_df = pd.DataFrame(TOKEN_LOG)
+    token_df.to_csv(WORK / "best_token_usage.csv", index=False)
+    summary = {
+        "num_llm_calls": int(len(token_df)),
+        "prompt_tokens": int(token_df["prompt_tokens"].sum()) if len(token_df) else 0,
+        "completion_tokens": int(token_df["completion_tokens"].sum()) if len(token_df) else 0,
+        "total_tokens": int(token_df["total_tokens"].sum()) if len(token_df) else 0,
+        "seconds": float(token_df["seconds"].sum()) if len(token_df) else 0,
+        "total_pipeline_sec": round(time.time() - run_t0, 3),
+        "sql_backend": "duckdb",
+        "retrieval_backend": "tfidf_cached",
+        "qdrant_enabled": bool(qdrant_retriever and qdrant_retriever.ok),
+        "qdrant_collection": getattr(qdrant_retriever, "collection", None),
+        "completed_rows": int(len(result_df)),
+    }
+    (WORK / "best_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
+    return summary
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=10)
     ap.add_argument("--no-qdrant", action="store_true")
+    ap.add_argument("--skip-qdrant-preload", action="store_true")
     args = ap.parse_args()
 
     run_t0 = time.time()
@@ -833,6 +864,11 @@ def main():
         )
         if not qdrant_retriever.ok:
             print("qdrant_error:", qdrant_retriever.error)
+        elif not args.skip_qdrant_preload:
+            print("preloading qdrant encoder:", qdrant_retriever.embed_model)
+            t0 = time.time()
+            qdrant_retriever.preload_encoder()
+            print("qdrant_encoder_load_sec:", round(time.time() - t0, 3))
 
     print("loading model...")
     t0 = time.time()
@@ -853,27 +889,9 @@ def main():
         print("question_sec:", qsec)
         rows.append({"id": qid, "question": q, "answer": ans, "seconds": qsec})
         debug[qid] = obs
+        save_outputs(rows, debug, qdrant_retriever, run_t0)
 
-    result_df = pd.DataFrame(rows)
-    result_df.to_csv(WORK / "best_results.csv", index=False)
-    result_df[["id", "answer"]].rename(columns={"answer": "response"}).to_csv(WORK / "best_submission.csv", index=False)
-    (WORK / "best_debug.json").write_text(json.dumps(debug, ensure_ascii=False, indent=2, default=str))
-
-    token_df = pd.DataFrame(TOKEN_LOG)
-    token_df.to_csv(WORK / "best_token_usage.csv", index=False)
-    summary = {
-        "num_llm_calls": int(len(token_df)),
-        "prompt_tokens": int(token_df["prompt_tokens"].sum()) if len(token_df) else 0,
-        "completion_tokens": int(token_df["completion_tokens"].sum()) if len(token_df) else 0,
-        "total_tokens": int(token_df["total_tokens"].sum()) if len(token_df) else 0,
-        "seconds": float(token_df["seconds"].sum()) if len(token_df) else 0,
-        "total_pipeline_sec": round(time.time() - run_t0, 3),
-        "sql_backend": "duckdb",
-        "retrieval_backend": "tfidf_cached",
-        "qdrant_enabled": bool(qdrant_retriever and qdrant_retriever.ok),
-        "qdrant_collection": getattr(qdrant_retriever, "collection", None),
-    }
-    (WORK / "best_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
+    summary = save_outputs(rows, debug, qdrant_retriever, run_t0)
 
     print("\nDONE")
     print("results:", WORK / "best_results.csv")
