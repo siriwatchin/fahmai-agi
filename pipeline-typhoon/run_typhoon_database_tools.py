@@ -139,6 +139,166 @@ def write_submission(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def _usage_from_response(data: dict[str, Any]) -> dict[str, int]:
+    usage = data.get("usage") or {}
+    return {
+        "prompt_tokens": int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0),
+        "completion_tokens": int(usage.get("completion_tokens") or usage.get("output_tokens") or 0),
+        "total_tokens": int(usage.get("total_tokens") or 0),
+    }
+
+
+def _merge_usage(total: dict[str, int], usage: dict[str, int]) -> None:
+    prompt = int(usage.get("prompt_tokens", 0))
+    completion = int(usage.get("completion_tokens", 0))
+    explicit_total = int(usage.get("total_tokens", 0))
+    total["prompt_tokens"] = total.get("prompt_tokens", 0) + prompt
+    total["completion_tokens"] = total.get("completion_tokens", 0) + completion
+    total["total_tokens"] = total.get("total_tokens", 0) + (explicit_total or prompt + completion)
+
+
+def _fmt_int(value: float | int) -> str:
+    return f"{int(round(float(value))):,}"
+
+
+def _category_from_qid(qid: str) -> str:
+    parts = qid.split("-")
+    return parts[2] if len(parts) >= 3 else "OTHER"
+
+
+def _collect_sources_from_obj(obj: Any, sources: set[str]) -> None:
+    if isinstance(obj, dict):
+        sql = obj.get("sql")
+        if isinstance(sql, str) and sql.strip():
+            tables = sorted(set(re.findall(r'\b(?:FACT|DIM|T2)_[A-Za-z0-9_]+\b|dim_[A-Za-z0-9_]+\b', sql, flags=re.IGNORECASE)))
+            sources.add("PostgreSQL SQL: " + (", ".join(tables[:12]) if tables else "custom query"))
+        name = obj.get("tool") or obj.get("name")
+        if isinstance(name, str) and name.strip():
+            sources.add(f"tool: {name}")
+        for value in obj.values():
+            _collect_sources_from_obj(value, sources)
+    elif isinstance(obj, list):
+        for item in obj:
+            _collect_sources_from_obj(item, sources)
+
+
+def _sources_for_trace(trace: list[dict[str, Any]]) -> list[str]:
+    sources: set[str] = set()
+    for item in trace:
+        if "deterministic" in item:
+            _collect_sources_from_obj(item["deterministic"], sources)
+        if item.get("tool"):
+            sources.add(f"tool: {item['tool']}")
+        if item.get("arguments"):
+            _collect_sources_from_obj(item["arguments"], sources)
+        if item.get("result"):
+            try:
+                _collect_sources_from_obj(json.loads(item["result"]), sources)
+            except Exception:
+                pass
+        if item.get("usage"):
+            sources.add("Typhoon API")
+    return sorted(sources)
+
+
+def write_run_report(
+    path: Path,
+    *,
+    model: str,
+    questions_path: Path,
+    sample_path: Path,
+    output_path: Path,
+    debug_path: Path,
+    schema_cache_path: Path,
+    qdrant_mode: str,
+    include_qdrant: bool,
+    debug: dict[str, Any],
+    total_seconds: float,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    category_counts: dict[str, int] = {}
+    answered_counts: dict[str, int] = {}
+    llm_turns = 0
+    tool_turns = 0
+    seconds: list[float] = []
+    per_question_lines: list[str] = []
+
+    for qid, rec in debug.items():
+        category = _category_from_qid(qid)
+        category_counts[category] = category_counts.get(category, 0) + 1
+        answer = str(rec.get("answer", "")).strip()
+        if answer and not answer.startswith("ไม่พบ"):
+            answered_counts[category] = answered_counts.get(category, 0) + 1
+        seconds.append(float(rec.get("seconds") or 0))
+
+        trace = rec.get("trace") or []
+        question_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        for item in trace:
+            if item.get("assistant") is not None:
+                llm_turns += 1
+            if item.get("tool"):
+                tool_turns += 1
+            if item.get("usage"):
+                _merge_usage(question_usage, item["usage"])
+                _merge_usage(total_usage, item["usage"])
+
+        sources = _sources_for_trace(trace)
+        source_text = "; ".join(sources) if sources else "deterministic/local rule หรือไม่พบ evidence ใน trace"
+        per_question_lines.append(
+            f"- {qid}: tokens={_fmt_int(question_usage['total_tokens'])} "
+            f"(prompt {_fmt_int(question_usage['prompt_tokens'])}, output {_fmt_int(question_usage['completion_tokens'])}), "
+            f"time={float(rec.get('seconds') or 0):.2f}s, source={source_text}"
+        )
+
+    total_questions = len(debug)
+    avg_tokens = total_usage["total_tokens"] / total_questions if total_questions else 0
+    avg_seconds = total_seconds / total_questions if total_questions else 0
+    fastest = min(seconds) if seconds else 0
+    slowest = max(seconds) if seconds else 0
+
+    category_lines = []
+    for cat in ["EASY", "MED", "HARD", "XHARD", "REF", "INJ", "OTHER"]:
+        if cat in category_counts:
+            category_lines.append(f"| {cat} | {answered_counts.get(cat, 0)}/{category_counts[cat]} answered | ไม่มี ground truth สำหรับคำนวณถูก/ผิดใน runner นี้ |")
+
+    lines = [
+        f"{model} + database tools",
+        f"  Token รวม: {_fmt_int(total_usage['total_tokens'])} tokens (prompt {_fmt_int(total_usage['prompt_tokens'])}, output {_fmt_int(total_usage['completion_tokens'])}, เฉลี่ย ~{_fmt_int(avg_tokens)}/ข้อ)",
+        "",
+        "ไฟล์/แหล่งข้อมูลที่ใช้:",
+        f"- questions: {questions_path}",
+        f"- sample submission: {sample_path}",
+        f"- output submission: {output_path}",
+        f"- debug trace: {debug_path}",
+        f"- schema cache: {schema_cache_path}",
+        "- answer logic: pipeline-typhoon/answer_bank.py + pipeline-typhoon/run_typhoon_database_tools.py",
+        "- PostgreSQL: database-tools/domain_tools.py + postgres_execute_readonly_sql/domain tools",
+        f"- Qdrant: {'enabled' if include_qdrant else 'disabled'} (mode={qdrant_mode})",
+        "",
+        "แยกตามหมวด:",
+        "| หมวด | ตอบได้ | หมายเหตุ |",
+        "|---|---:|---|",
+        *category_lines,
+        "",
+        "เวลารัน:",
+        "| รายการ | เวลา |",
+        "|---|---:|",
+        f"| รวมทั้งหมด (wall-clock) | {total_seconds:.1f} วินาที |",
+        f"| เฉลี่ยต่อข้อ | {avg_seconds:.1f} วินาที |",
+        f"| ข้อเร็วสุด / ช้าสุด | {fastest:.1f} / {slowest:.1f} วินาที |",
+        f"| LLM turns ที่ log ไว้ | {llm_turns:,} ครั้ง |",
+        f"| Tool calls ที่ log ไว้ | {tool_turns:,} ครั้ง |",
+        "",
+        f"ตอบ {sum(answered_counts.values())} ข้อจาก {total_questions} ข้อ (ยังไม่ประเมินความถูกต้อง เพราะไม่มีไฟล์เฉลยใน runner)",
+        "",
+        "รายละเอียดต่อข้อ:",
+        *per_question_lines,
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def needs_qdrant(question: str) -> bool:
     q = question.lower()
     selected = infer_contexts(question)
@@ -550,7 +710,7 @@ def answer_question(registry: Any, tools: list[dict[str, Any]], qid: str, questi
         data = call_typhoon(messages, tools)
         msg = data["choices"][0]["message"]
         messages.append(msg)
-        trace.append({"step": step, "assistant": msg})
+        trace.append({"step": step, "assistant": msg, "usage": _usage_from_response(data)})
 
         tool_calls = msg.get("tool_calls") or []
         if tool_calls:
@@ -585,6 +745,7 @@ def answer_question(registry: Any, tools: list[dict[str, Any]], qid: str, questi
     messages.append(final_prompt)
     data = call_typhoon(messages, [], max_tokens=300)
     answer = (data["choices"][0]["message"].get("content") or "").strip()
+    trace.append({"step": "final", "assistant": data["choices"][0]["message"], "usage": _usage_from_response(data)})
     return answer.replace("\n", " "), trace
 
 
@@ -594,6 +755,7 @@ def main() -> None:
     ap.add_argument("--sample", type=Path, default=ROOT / "sample_submission.csv")
     ap.add_argument("--output", type=Path, default=ROOT / "submission.csv")
     ap.add_argument("--debug", type=Path, default=ROOT / "typhoon_debug.json")
+    ap.add_argument("--report", type=Path, default=ROOT / "typhoon_run_report.md")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--max-steps", type=int, default=6)
     ap.add_argument("--no-qdrant", action="store_true")
@@ -649,9 +811,23 @@ def main() -> None:
     for qid in sample_ids:
         outputs.append({"id": qid, "response": answers_by_id.get(qid, "")})
 
+    total_seconds = time.time() - start
     write_submission(args.output, outputs)
     args.debug.write_text(json.dumps(debug, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    print(json.dumps({"ok": True, "output": str(args.output), "rows": len(outputs), "seconds": round(time.time() - start, 3)}, ensure_ascii=False))
+    write_run_report(
+        args.report,
+        model=os.getenv("TYPHOON_MODEL", DEFAULT_MODEL),
+        questions_path=args.questions,
+        sample_path=args.sample,
+        output_path=args.output,
+        debug_path=args.debug,
+        schema_cache_path=args.schema_cache,
+        qdrant_mode=qdrant_mode,
+        include_qdrant=include_qdrant,
+        debug=debug,
+        total_seconds=total_seconds,
+    )
+    print(json.dumps({"ok": True, "output": str(args.output), "debug": str(args.debug), "report": str(args.report), "rows": len(outputs), "seconds": round(total_seconds, 3)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
