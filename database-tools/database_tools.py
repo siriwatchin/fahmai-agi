@@ -292,21 +292,36 @@ class QdrantDatabaseTools:
             self._encoder = SentenceTransformer(self.embed_model)
         return self._encoder
 
-    def _query_points(self, collection_name: str, vector: list[float], limit: int):
+    def _query_points(self, collection_name: str, vector: list[float], limit: int, vector_name: str | None = None):
         if hasattr(self.client, "search"):
+            query_vector = (vector_name, vector) if vector_name else vector
             return self.client.search(
                 collection_name=collection_name,
-                query_vector=vector,
+                query_vector=query_vector,
                 limit=limit,
                 with_payload=True,
             )
+        kwargs = {"using": vector_name} if vector_name else {}
         response = self.client.query_points(
             collection_name=collection_name,
             query=vector,
             limit=limit,
             with_payload=True,
+            **kwargs,
         )
         return response.points
+
+    def _collection_vector_names(self, collection_name: str) -> list[str]:
+        try:
+            info = self.client.get_collection(collection_name)
+            vectors = info.config.params.vectors
+            if isinstance(vectors, dict):
+                return list(vectors.keys())
+            if hasattr(vectors, "__root__") and isinstance(vectors.__root__, dict):
+                return list(vectors.__root__.keys())
+        except Exception:
+            pass
+        return []
 
     def healthcheck(self) -> str:
         try:
@@ -349,7 +364,10 @@ class QdrantDatabaseTools:
     def search(self, query: str, top_k: int = 8, collection: str | None = None) -> str:
         try:
             vector = self.encoder.encode([query], normalize_embeddings=True)[0].tolist()
-            hits = self._query_points(collection or self.collection, vector, top_k)
+            collection_name = collection or self.collection
+            vector_names = self._collection_vector_names(collection_name)
+            vector_name = vector_names[0] if vector_names else None
+            hits = self._query_points(collection_name, vector, top_k, vector_name=vector_name)
             rows = []
             for h in hits:
                 payload = dict(h.payload or {})

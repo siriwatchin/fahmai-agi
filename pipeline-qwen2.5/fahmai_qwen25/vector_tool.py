@@ -38,6 +38,20 @@ class QdrantVectorTool:
             vectors_config=VectorParams(size=self.dim, distance=Distance.COSINE),
         )
 
+    def _vector_name(self) -> str | None:
+        try:
+            info = self.client.get_collection(self.collection)
+            vectors = info.config.params.vectors
+            if isinstance(vectors, dict):
+                names = list(vectors.keys())
+                return names[0] if names else None
+            if hasattr(vectors, "__root__") and isinstance(vectors.__root__, dict):
+                names = list(vectors.__root__.keys())
+                return names[0] if names else None
+        except Exception:
+            pass
+        return None
+
     def upsert_texts(self, records: list[dict[str, Any]], batch_size: int = 64) -> None:
         point_id = 0
         for i in range(0, len(records), batch_size):
@@ -58,21 +72,24 @@ class QdrantVectorTool:
         flt = None
         if source:
             flt = Filter(must=[FieldCondition(key="source", match=MatchValue(value=source))])
+        vector_name = self._vector_name()
         if hasattr(self.client, "search"):
             hits = self.client.search(
                 collection_name=self.collection,
-                query_vector=vector,
+                query_vector=(vector_name, vector) if vector_name else vector,
                 query_filter=flt,
                 limit=top_k,
                 with_payload=True,
             )
         else:
+            kwargs = {"using": vector_name} if vector_name else {}
             hits = self.client.query_points(
                 collection_name=self.collection,
                 query=vector,
                 query_filter=flt,
                 limit=top_k,
                 with_payload=True,
+                **kwargs,
             ).points
         out = []
         for h in hits:
