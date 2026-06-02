@@ -1,0 +1,5 @@
+psycopg[binary]>=3.2
+qdrant-client>=1.11
+sentence-transformers>=3.0
+python-dotenv>=1.0
+
