@@ -212,6 +212,7 @@ def write_run_report(
     schema_cache_path: Path,
     qdrant_mode: str,
     include_qdrant: bool,
+    use_answer_bank: bool,
     debug: dict[str, Any],
     total_seconds: float,
 ) -> None:
@@ -272,7 +273,8 @@ def write_run_report(
         f"- output submission: {output_path}",
         f"- debug trace: {debug_path}",
         f"- schema cache: {schema_cache_path}",
-        "- answer logic: pipeline-typhoon/answer_bank.py + pipeline-typhoon/run_typhoon_database_tools.py",
+        f"- answer bank: {'enabled' if use_answer_bank else 'disabled'} (pipeline-typhoon/answer_bank.py)",
+        "- answer logic: pipeline-typhoon/run_typhoon_database_tools.py",
         "- PostgreSQL: database-tools/domain_tools.py + postgres_execute_readonly_sql/domain tools",
         f"- Qdrant: {'enabled' if include_qdrant else 'disabled'} (mode={qdrant_mode})",
         "",
@@ -685,10 +687,20 @@ def deterministic_answer(registry: Any, qid: str, question: str) -> tuple[str | 
     return None, {}
 
 
-def answer_question(registry: Any, tools: list[dict[str, Any]], qid: str, question: str, max_steps: int, schema_summary: str) -> tuple[str, list[dict[str, Any]]]:
-    det, evidence = answer_bank_deterministic_answer(registry, qid, question)
-    if det:
-        return det, [{"deterministic": evidence}]
+def answer_question(
+    registry: Any,
+    tools: list[dict[str, Any]],
+    qid: str,
+    question: str,
+    max_steps: int,
+    schema_summary: str,
+    *,
+    use_answer_bank: bool = True,
+) -> tuple[str, list[dict[str, Any]]]:
+    if use_answer_bank:
+        det, evidence = answer_bank_deterministic_answer(registry, qid, question)
+        if det:
+            return det, [{"deterministic": evidence}]
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -758,6 +770,7 @@ def main() -> None:
     ap.add_argument("--report", type=Path, default=ROOT / "typhoon_run_report.md")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--max-steps", type=int, default=6)
+    ap.add_argument("--no-answer-bank", action="store_true", help="Disable deterministic answer_bank.py and force Typhoon/tool-calling flow.")
     ap.add_argument("--no-qdrant", action="store_true")
     ap.add_argument("--qdrant-mode", choices=["auto", "always", "never"], default="auto")
     ap.add_argument("--schema-cache", type=Path, default=ROOT / "outputs" / "schema_cache.json")
@@ -800,7 +813,15 @@ def main() -> None:
         try:
             use_qdrant_for_question = qdrant_mode == "always" or (qdrant_mode == "auto" and needs_qdrant(question))
             question_tools = select_tool_schemas(registry.get_openai_tool_schemas(), include_qdrant and use_qdrant_for_question)
-            answer, trace = answer_question(registry, question_tools, qid, question, args.max_steps, schema_summary)
+            answer, trace = answer_question(
+                registry,
+                question_tools,
+                qid,
+                question,
+                args.max_steps,
+                schema_summary,
+                use_answer_bank=not args.no_answer_bank,
+            )
         except Exception as e:
             answer = f"ไม่พบคำตอบในชุดข้อมูล"
             trace = [{"error": str(e)}]
@@ -824,6 +845,7 @@ def main() -> None:
         schema_cache_path=args.schema_cache,
         qdrant_mode=qdrant_mode,
         include_qdrant=include_qdrant,
+        use_answer_bank=not args.no_answer_bank,
         debug=debug,
         total_seconds=total_seconds,
     )
