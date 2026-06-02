@@ -294,6 +294,34 @@ class QdrantDatabaseTools:
     def list_collections(self) -> str:
         return self.healthcheck()
 
+    def recreate_collection(self, collection: str | None = None) -> str:
+        try:
+            from qdrant_client.models import Distance, VectorParams
+
+            dim = int(self.encoder.get_sentence_embedding_dimension())
+            self.client.recreate_collection(
+                collection_name=collection or self.collection,
+                vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+            )
+            return _json({"ok": True, "collection": collection or self.collection, "dimension": dim})
+        except Exception as e:
+            return _json({"ok": False, "error": str(e)})
+
+    def upsert_texts(self, records: list[dict[str, Any]], collection: str | None = None, start_id: int = 0) -> str:
+        try:
+            from qdrant_client.models import PointStruct
+
+            points = []
+            texts = [f"passage: {str(r.get('text', ''))}" for r in records]
+            vectors = self.encoder.encode(texts, normalize_embeddings=True, show_progress_bar=False).tolist()
+            for offset, (record, vector) in enumerate(zip(records, vectors)):
+                payload = dict(record)
+                points.append(PointStruct(id=start_id + offset, vector=vector, payload=payload))
+            self.client.upsert(collection_name=collection or self.collection, points=points)
+            return _json({"ok": True, "upserted": len(points), "collection": collection or self.collection})
+        except Exception as e:
+            return _json({"ok": False, "error": str(e)})
+
     def search(self, query: str, top_k: int = 8, collection: str | None = None) -> str:
         try:
             vector = self.encoder.encode([f"query: {query}"], normalize_embeddings=True)[0].tolist()
@@ -336,6 +364,8 @@ class DatabaseToolRegistry:
                 {
                     "qdrant_healthcheck": lambda: qdrant.healthcheck(),
                     "qdrant_list_collections": lambda: qdrant.list_collections(),
+                    "qdrant_recreate_collection": qdrant.recreate_collection,
+                    "qdrant_upsert_texts": qdrant.upsert_texts,
                     "qdrant_search": qdrant.search,
                 }
             )
@@ -451,6 +481,17 @@ def get_openai_tool_schemas(include_qdrant: bool = True) -> list[dict[str, Any]]
                 tool("qdrant_healthcheck", "Check Qdrant connection and collections.", {}),
                 tool("qdrant_list_collections", "List Qdrant collections.", {}),
                 tool(
+                    "qdrant_recreate_collection",
+                    "Delete and recreate a Qdrant collection with the configured embedding dimension.",
+                    {"collection": {"type": "string"}},
+                ),
+                tool(
+                    "qdrant_upsert_texts",
+                    "Upsert text records into Qdrant. Each record should include text plus optional path/source/chunk metadata.",
+                    {"records": {"type": "array", "items": {"type": "object"}}, "collection": {"type": "string"}, "start_id": {"type": "integer", "default": 0}},
+                    ["records"],
+                ),
+                tool(
                     "qdrant_search",
                     "Semantic vector search over embedded corpus.",
                     {"query": {"type": "string"}, "top_k": {"type": "integer", "default": 8}, "collection": {"type": "string"}},
@@ -464,4 +505,3 @@ def get_openai_tool_schemas(include_qdrant: bool = True) -> list[dict[str, Any]]
 if __name__ == "__main__":
     registry = build_default_registry(include_qdrant=False)
     print(registry.call_tool("postgres_healthcheck"))
-

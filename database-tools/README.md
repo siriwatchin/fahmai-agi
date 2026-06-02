@@ -47,6 +47,8 @@ Qdrant vector tools:
 - `qdrant_healthcheck`
 - `qdrant_list_collections`
 - `qdrant_search`
+- `qdrant_recreate_collection`
+- `qdrant_upsert_texts`
 
 Agent helpers:
 
@@ -79,6 +81,33 @@ print(registry.call_tool("qdrant_search", {
 }))
 ```
 
+## Shared Vector Database
+
+Qdrant is model-agnostic. Every LLM pipeline can use the same collection as long as it sends search queries through the same embedding model used at ingest time.
+
+Recommended shared setup:
+
+- Collection name: `fahmai_public`
+- Embedding model: `intfloat/multilingual-e5-base`
+- Payload fields: `text`, `path`, `source`, `chunk`
+
+Ingest once:
+
+```bash
+python qdrant_ingest.py --data-dir "$DATA_DIR" --recreate
+```
+
+Then any model can query:
+
+```python
+registry.call_tool("qdrant_search", {
+    "query": "Powercell X3 recall early warning warranty claim",
+    "top_k": 8
+})
+```
+
+Do not create separate vector collections per model unless the embedding model or corpus changes. Separate per-model collections usually waste time and make retrieval inconsistent.
+
 ## Safety
 
 - SQL execution is read-only only: `SELECT` and `WITH`.
@@ -86,4 +115,3 @@ print(registry.call_tool("qdrant_search", {
 - Identifier-based helper tools validate table/column names.
 - Free-form SQL should be used only by trusted agent code after planning/validation.
 - Credentials are never hardcoded in this package.
-
