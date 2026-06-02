@@ -66,3 +66,58 @@ Outputs:
 - `BAAI/bge-m3` is the required vector embedding/search model only. It is separate from the Qwen generation model.
 - The LLM is used as a final synthesizer, not as the primary calculator.
 - Qwen runs with a FahMai system prompt that enforces context-first tool use. When `OBSERVATIONS` are already supplied by the pipeline, it switches to final-answer mode and returns a concise Thai answer instead of tool-call JSON.
+
+## Run FastAPI Chat Server
+
+This wraps `agentic_best_integrated_qdrant.py`, which is the current B200 runner with SQL-first rules, Qdrant retrieval, and Qwen final answer generation.
+
+```bash
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+
+source ~/.fahmai_db_env 2>/dev/null || true
+
+# On B200, Postgres host currently times out. Use duckdb to start fast.
+# Switch to auto/postgres only when PG_DSN is reachable from B200.
+export SQL_BACKEND="duckdb"
+export ALLOW_SQL_FALLBACK="1"
+
+export QDRANT_URL="http://localhost:6333"
+export QDRANT_COLLECTION="fahmai_rag_bge"
+export EMBED_MODEL="$HOME/bank500/qwen35/models/bge-m3"
+export API_OUTPUT_DIR="$HOME/bank500"
+
+pip install -U fastapi "uvicorn[standard]"
+
+uvicorn api_server:app --host 0.0.0.0 --port 5555
+```
+
+Smoke test:
+
+```bash
+curl -s http://127.0.0.1:5555/health
+
+curl -s -X POST http://127.0.0.1:5555/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"question":"วันนี้วันอะไร"}}'
+```
+
+API contract:
+
+```json
+{
+  "data": {
+    "question": "วันนี้วันอะไร"
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "answer": "วันอังคาร"
+  }
+}
+```
