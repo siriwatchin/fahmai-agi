@@ -5,6 +5,13 @@ import os
 import re
 import time
 
+# Keep model loading conservative on shared B200/MIG runtimes. Transformers can
+# otherwise use worker threads while materializing tensors onto CUDA, which has
+# triggered PyTorch NVML allocator asserts on this environment.
+os.environ.setdefault("HF_ENABLE_PARALLEL_LOADING", "false")
+os.environ.setdefault("HF_PARALLEL_LOADING_WORKERS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 import duckdb
 import pandas as pd
 import torch
@@ -413,6 +420,7 @@ def load_questions():
 
 
 def load_model():
+    torch.set_num_threads(max(1, int(os.getenv("TORCH_NUM_THREADS", "1"))))
     if os.getenv("DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP", "1").lower() not in {"0", "false", "no"}:
         try:
             import transformers.modeling_utils as modeling_utils
@@ -423,7 +431,21 @@ def load_model():
         except Exception as e:
             print("allocator_warmup_disable_error:", e, flush=True)
     tok = AutoTokenizer.from_pretrained(MODEL)
-    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map={"": 0})
+
+    strategy = os.getenv("MODEL_LOAD_STRATEGY", "cpu_first").lower()
+    if strategy in {"device_map", "cuda_direct"}:
+        model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map={"": 0})
+    elif strategy == "auto":
+        model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map="auto")
+    else:
+        print("model_load_strategy: cpu_first", flush=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL,
+            dtype=torch.bfloat16,
+            low_cpu_mem_usage=False,
+        )
+        model.eval()
+        model.to("cuda")
     return tok, model
 
 
