@@ -172,7 +172,9 @@ def _load_runtime() -> RuntimeState:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global state
-    state = await asyncio.to_thread(_load_runtime)
+    # Load CUDA objects on the main server thread. On B200 MIG, loading or
+    # generating through a worker thread can trip PyTorch's NVML allocator path.
+    state = _load_runtime()
     yield
 
 
@@ -209,8 +211,8 @@ async def chat(req: ChatRequest) -> ChatResponse:
     qid = req.data.id or state.question_to_id.get(question) or "API-Q"
     t0 = time.time()
     async with state.lock:
-        answer, obs = await asyncio.to_thread(
-            pipeline.answer_one,
+        # Keep Qwen inference on the same thread that initialized CUDA.
+        answer, obs = pipeline.answer_one(
             state.sqltool,
             state.retriever,
             state.qdrant_retriever,
@@ -223,4 +225,3 @@ async def chat(req: ChatRequest) -> ChatResponse:
     seconds = time.time() - t0
     _save_api_debug(qid, question, answer, obs, seconds)
     return ChatResponse(data=ChatAnswer(answer=answer))
-
