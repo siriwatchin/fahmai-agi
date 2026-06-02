@@ -31,7 +31,7 @@ export PG_DSN="postgresql://USER:PASSWORD@HOST:PORT/DBNAME"
 export QDRANT_URL="http://HOST:6333"
 export QDRANT_API_KEY="..."
 export QDRANT_COLLECTION="fahmai_public"
-export EMBED_MODEL="intfloat/multilingual-e5-base"
+export EMBED_MODEL="BAAI/bge-m3"
 export QWEN_MODEL_PATH="$HOME/scamper_house/qwen35/models/Qwen2.5-7B-Instruct"
 export DATA_DIR="$HOME/scamper_house/fah-mai-the-finale-enterprise-data-agentic-showdown"
 export QUESTIONS_CSV="$HOME/scamper_house/questions.csv"
@@ -63,5 +63,5 @@ Outputs:
 
 - The pipeline prefers deterministic SQL when the question has clear table/field intent.
 - Qdrant is used for document snippets, logs, memos, refusal evidence, and schema-ish text.
+- `BAAI/bge-m3` is the required vector embedding/search model only. It is separate from the Qwen generation model.
 - The LLM is used as a final synthesizer, not as the primary calculator.
-

@@ -36,11 +36,10 @@ class Settings:
             qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
             qdrant_api_key=os.getenv("QDRANT_API_KEY") or None,
             qdrant_collection=os.getenv("QDRANT_COLLECTION", "fahmai_public"),
-            embed_model=os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-base"),
+            embed_model=os.getenv("EMBED_MODEL", "BAAI/bge-m3"),
             qwen_model_path=Path(os.getenv("QWEN_MODEL_PATH", "")),
             data_dir=Path(os.getenv("DATA_DIR", "")),
             questions_csv=Path(os.getenv("QUESTIONS_CSV", "")),
             output_dir=Path(os.getenv("OUTPUT_DIR", "outputs")),
             max_context_chars=int(os.getenv("MAX_CONTEXT_CHARS", "9000")),
         )
-

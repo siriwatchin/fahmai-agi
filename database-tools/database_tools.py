@@ -79,7 +79,7 @@ class DbToolConfig:
             qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
             qdrant_api_key=os.getenv("QDRANT_API_KEY") or None,
             qdrant_collection=os.getenv("QDRANT_COLLECTION", "fahmai_public"),
-            embed_model=os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-base"),
+            embed_model=os.getenv("EMBED_MODEL", "BAAI/bge-m3"),
         )
 
 
@@ -312,7 +312,7 @@ class QdrantDatabaseTools:
             from qdrant_client.models import PointStruct
 
             points = []
-            texts = [f"passage: {str(r.get('text', ''))}" for r in records]
+            texts = [str(r.get("text", "")) for r in records]
             vectors = self.encoder.encode(texts, normalize_embeddings=True, show_progress_bar=False).tolist()
             for offset, (record, vector) in enumerate(zip(records, vectors)):
                 payload = dict(record)
@@ -324,7 +324,7 @@ class QdrantDatabaseTools:
 
     def search(self, query: str, top_k: int = 8, collection: str | None = None) -> str:
         try:
-            vector = self.encoder.encode([f"query: {query}"], normalize_embeddings=True)[0].tolist()
+            vector = self.encoder.encode([query], normalize_embeddings=True)[0].tolist()
             hits = self.client.search(
                 collection_name=collection or self.collection,
                 query_vector=vector,

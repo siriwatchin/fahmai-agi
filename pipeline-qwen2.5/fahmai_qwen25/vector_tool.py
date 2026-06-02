@@ -8,14 +8,6 @@ from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, P
 from sentence_transformers import SentenceTransformer
 
 
-def embed_query_prefix(text: str) -> str:
-    return f"query: {text}"
-
-
-def embed_passage_prefix(text: str) -> str:
-    return f"passage: {text}"
-
-
 @dataclass
 class VectorSearchResult:
     score: float
@@ -43,7 +35,7 @@ class QdrantVectorTool:
         point_id = 0
         for i in range(0, len(records), batch_size):
             batch = records[i : i + batch_size]
-            texts = [embed_passage_prefix(r["text"]) for r in batch]
+            texts = [r["text"] for r in batch]
             vectors = self.encoder.encode(texts, normalize_embeddings=True, show_progress_bar=False).tolist()
             points = []
             for r, v in zip(batch, vectors):
@@ -55,7 +47,7 @@ class QdrantVectorTool:
             self.client.upsert(collection_name=self.collection, points=points)
 
     def search(self, query: str, top_k: int = 8, source: str | None = None) -> list[VectorSearchResult]:
-        vector = self.encoder.encode([embed_query_prefix(query)], normalize_embeddings=True)[0].tolist()
+        vector = self.encoder.encode([query], normalize_embeddings=True)[0].tolist()
         flt = None
         if source:
             flt = Filter(must=[FieldCondition(key="source", match=MatchValue(value=source))])
@@ -72,4 +64,3 @@ class QdrantVectorTool:
             text = str(payload.get("text", ""))
             out.append(VectorSearchResult(score=float(h.score), text=text, payload=payload))
         return out
-
