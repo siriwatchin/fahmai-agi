@@ -25,6 +25,7 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
 PG_DSN = os.getenv("PG_DSN", "")
 PG_SCHEMA = os.getenv("PG_SCHEMA", "public")
 SQL_BACKEND = os.getenv("SQL_BACKEND", "auto").lower()
+ALLOW_SQL_FALLBACK = os.getenv("ALLOW_SQL_FALLBACK", "1").lower() not in {"0", "false", "no"}
 
 SYSTEM_PROMPT = """
 You are FahMai Enterprise Data Agent.
@@ -129,7 +130,7 @@ class SQLTool:
                 raise RuntimeError("no postgres tables found")
             except Exception as e:
                 self.error = str(e)
-                if backend in {"postgres", "pg"}:
+                if backend in {"postgres", "pg"} and not ALLOW_SQL_FALLBACK:
                     raise
 
         self.con = duckdb.connect()
