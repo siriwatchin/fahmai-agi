@@ -77,6 +77,34 @@ def _read_tool_json(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+def _apply_trace_validation(answer_obj: Any, trace: list[dict[str, Any]], route: dict[str, Any] | None = None) -> Any:
+    route_meta = route or {"intent_type": "local_7b_repair"}
+    validation = hosted_api.pipeline.validate_final_answer(
+        answer_obj.answer,
+        trace,
+        route_meta,
+        answer_obj.security or {},
+    )
+    answer_obj.answer = validation.get("answer") or answer_obj.answer
+    answer_obj.status = validation.get("status") or answer_obj.status
+    answer_obj.confidence = validation.get("confidence") or answer_obj.confidence
+    answer_obj.refs = validation.get("refs", [])
+    answer_obj.security = validation.get("security", answer_obj.security or {})
+    answer_obj.route = {
+        **(validation.get("route") or route_meta),
+        "repair_trace": [
+            {
+                "step": item.get("step"),
+                "tool": item.get("tool"),
+                "arguments": item.get("arguments"),
+            }
+            for item in trace
+            if item.get("tool")
+        ],
+    }
+    return answer_obj
+
+
 def _money(value: Any) -> str:
     try:
         return f"{float(value):,.0f}"
@@ -157,6 +185,16 @@ async def _answer_payload_7b(payload: Any) -> Any:
         except Exception as exc:
             answer_obj.answer = f"ไม่สามารถเรียกใช้เครื่องมือ {name} ได้: {exc}"
             answer_obj.status = "error"
+            answer_obj.refs = hosted_api.pipeline.refs_from_trace(trace)
+            answer_obj.route = {
+                "intent_type": "local_7b_repair",
+                "repair_error_tool": name,
+                "repair_trace": [
+                    {"step": item.get("step"), "tool": item.get("tool"), "arguments": item.get("arguments")}
+                    for item in trace
+                    if item.get("tool")
+                ],
+            }
             return answer_obj
 
         compact = _compact_tool_result(result)
@@ -209,13 +247,13 @@ async def _answer_payload_7b(payload: Any) -> Any:
             answer_obj.status = "answered"
             answer_obj.seconds = round((answer_obj.seconds or 0) + (time.time() - started), 3)
             answer_obj.token_usage = token_usage
-            return answer_obj
+            return _apply_trace_validation(answer_obj, trace)
 
     answer_obj.answer = "ไม่พบคำตอบในชุดข้อมูล"
     answer_obj.status = "needs_review"
     answer_obj.seconds = round((answer_obj.seconds or 0) + (time.time() - started), 3)
     answer_obj.token_usage = token_usage
-    return answer_obj
+    return _apply_trace_validation(answer_obj, trace)
 
 
 hosted_api._answer_payload = _answer_payload_7b

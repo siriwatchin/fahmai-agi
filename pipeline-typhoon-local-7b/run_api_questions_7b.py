@@ -119,6 +119,7 @@ def audit_record(
         "total_output_token": total_output_token,
         "request_seconds": request_seconds,
         "sources": sources or [],
+        "refs": sources or [],
         "token_usage": token_usage or {},
         "token_log": token_log or [],
         "llm_audit": llm_audit or [],
@@ -159,12 +160,23 @@ def write_audit_files(audit_dir: Path, audit_rows: list[dict[str, Any]]) -> None
                 "ok": rec.get("ok"),
             }
         )
-        for ref in rec.get("refs") or []:
+        for tool_event in rec.get("tool_audit") or []:
             tool_rows.append(
                 {
                     "ts": rec.get("ts"),
-                    "request_uuid": rec.get("request_uuid"),
-                    "id": rec.get("id"),
+                    "request_uuid": rec.get("id"),
+                    "id": rec.get("qid"),
+                    "tool": tool_event.get("tool"),
+                    "output_obj": tool_event,
+                    "ok": True,
+                }
+            )
+        for ref in rec.get("refs") or rec.get("sources") or []:
+            tool_rows.append(
+                {
+                    "ts": rec.get("ts"),
+                    "request_uuid": rec.get("id"),
+                    "id": rec.get("qid"),
                     "tool": "reference",
                     "output_obj": ref,
                     "ok": True,
@@ -215,7 +227,8 @@ def write_report(path: Path, *, api_url: str, audit_rows: list[dict[str, Any]], 
     rows = []
 
     for rec in audit_rows:
-        status = rec.get("status") or "unknown"
+        observation = rec.get("observation") or {}
+        status = observation.get("status") or rec.get("status") or "unknown"
         status_counts[status] = status_counts.get(status, 0) + 1
         answer = rec.get("answer") or ""
         if looks_like_tool_leak(answer):
@@ -225,7 +238,7 @@ def write_report(path: Path, *, api_url: str, audit_rows: list[dict[str, Any]], 
         usage = rec.get("token_usage") or {}
         for key in total_tokens:
             total_tokens[key] += int(usage.get(key) or 0)
-        refs = rec.get("refs") or []
+        refs = rec.get("refs") or rec.get("sources") or []
         ref_text = ", ".join(f"{r.get('type')}:{r.get('source')}" for r in refs[:8] if isinstance(r, dict)) or "-"
         rows.append(f"- {rec.get('id')}: status={status}, seconds={rec.get('seconds')}, refs={ref_text}, answer={answer[:180]}")
 
@@ -363,6 +376,13 @@ def main() -> None:
             answer, answer_ok, answer_decision = finalize_submission_answer(item, row["question"])
             answers[qid] = answer
             request_seconds = round(time.time() - t0, 3)
+            route_meta = item.get("route") or {}
+            tool_audit = route_meta.get("repair_trace") or []
+            tool_summary: dict[str, Any] = {}
+            for tool_event in tool_audit:
+                tool = tool_event.get("tool") if isinstance(tool_event, dict) else None
+                if tool:
+                    tool_summary[tool] = int(tool_summary.get(tool) or 0) + 1
             audit_rec = audit_record(
                 request_uuid=request_uuid,
                 qid=qid,
@@ -375,14 +395,14 @@ def main() -> None:
                 token_usage=item.get("token_usage") or {},
                 token_log=[],
                 llm_audit=[],
-                tool_audit=[],
-                tool_summary={},
+                tool_audit=tool_audit,
+                tool_summary=tool_summary,
                 runtime={
                     "model": "local-7b",
                     "api_seconds": item.get("seconds"),
                     "answer_bank": item.get("answer_bank"),
                     "run_log": item.get("run_log"),
-                    "qdrant_loaded": (item.get("route") or {}).get("qdrant_loaded"),
+                    "qdrant_loaded": route_meta.get("qdrant_loaded"),
                 },
                 observation={
                     "raw_answer": raw_answer,
@@ -390,7 +410,7 @@ def main() -> None:
                     "status": item.get("status"),
                     "confidence": item.get("confidence"),
                     "security": item.get("security") or {},
-                    "route_meta": item.get("route") or {},
+                    "route_meta": route_meta,
                     "tool_call_leak": looks_like_tool_leak(str(raw_answer or "")),
                     "ok": answer_ok,
                 },
