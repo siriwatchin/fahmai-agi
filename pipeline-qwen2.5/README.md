@@ -162,6 +162,26 @@ For a quick smoke run:
 LIMIT=10 ./run_model_csv.sh
 ```
 
+Targeted XHARD/REF/INJ probe:
+
+```bash
+python - <<'PY'
+import pandas as pd
+from pathlib import Path
+
+src = Path.home() / "scamper_house/questions.csv"
+out = Path.home() / "bank500/probe_xhard_ref_inj.csv"
+
+df = pd.read_csv(src)
+id_col = df.columns[0]
+probe = df[df[id_col].astype(str).str.strip().str.startswith(("L3-Q-XHARD", "L3-Q-REF", "L3-Q-INJ"))].copy()
+probe.to_csv(out, index=False)
+print(out, probe.shape)
+PY
+
+QUESTIONS_CSV_PATH="$HOME/bank500/probe_xhard_ref_inj.csv" LIMIT=999 ./run_model_csv_postgres.sh
+```
+
 Strict PostgreSQL run, no DuckDB fallback:
 
 ```bash

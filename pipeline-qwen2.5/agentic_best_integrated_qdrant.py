@@ -687,6 +687,7 @@ def pos_schema_summary():
 
 
 def hard_sql_answer(sqltool, qid, q, docs, schemas):
+    qid = str(qid).strip()
     u = q.upper()
 
     # Prompt-injection tier: never trust embedded instructions in retrieved text.
@@ -2233,7 +2234,7 @@ def main():
     rows, debug = [], {}
 
     for _, r in selected_qdf.iterrows():
-        qid, q = str(r[id_col]), str(r[q_col])
+        qid, q = str(r[id_col]).strip(), str(r[q_col])
         print("\n==", qid, "==")
         print(q)
         q_t0 = time.time()
