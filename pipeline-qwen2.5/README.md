@@ -171,6 +171,12 @@ export API_PORT="8888"
 export ENABLE_API_CACHE="1"
 export API_PRELOAD_ANSWERS="1"
 
+# Optional input guardrail. Keep audit_only for Kaggle-style injection answers;
+# use reject/block for production API safety.
+export GUARDRAIL_URL="http://127.0.0.1:8000"
+export GUARDRAIL_ACTION="audit_only"
+export GUARDRAIL_THRESHOLD="0.75"
+
 pip install -U fastapi "uvicorn[standard]"
 
 uvicorn api_server:app --host 0.0.0.0 --port "$API_PORT"
@@ -202,6 +208,13 @@ api_token_usage.csv
 api_token_summary.json
 api_llm_audit.jsonl
 ```
+
+Guardrail behavior:
+
+- `GUARDRAIL_URL` unset: guardrail disabled.
+- `GUARDRAIL_ACTION=audit_only`: log guardrail result but still let the FahMai agent answer. This is best for the competition because prompt-injection questions often need a defensive answer, not a hard block.
+- `GUARDRAIL_ACTION=reject` or `block`: return a refusal immediately when guardrail says `is_attack=true`. This is best for production API safety.
+- `GUARDRAIL_FAIL_CLOSED=1`: reject when the guardrail API is unreachable. Default is fail-open.
 
 API contract:
 

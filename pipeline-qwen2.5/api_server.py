@@ -5,6 +5,8 @@ import json
 import os
 import re
 import time
+import urllib.error
+import urllib.request
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +26,13 @@ API_PORT = int(os.getenv("API_PORT", "8888"))
 ENABLE_API_CACHE = os.getenv("ENABLE_API_CACHE", "1").lower() not in {"0", "false", "no"}
 API_PRELOAD_ANSWERS = os.getenv("API_PRELOAD_ANSWERS", "1").lower() not in {"0", "false", "no"}
 API_PRELOAD_RESULTS = Path(os.getenv("API_PRELOAD_RESULTS", "")).expanduser() if os.getenv("API_PRELOAD_RESULTS") else None
+GUARDRAIL_URL = os.getenv("GUARDRAIL_URL", "").rstrip("/")
+GUARDRAIL_MODEL = os.getenv("GUARDRAIL_MODEL", "model")
+GUARDRAIL_THRESHOLD = os.getenv("GUARDRAIL_THRESHOLD")
+GUARDRAIL_MAX_LENGTH = int(os.getenv("GUARDRAIL_MAX_LENGTH", "510"))
+GUARDRAIL_TIMEOUT_SEC = float(os.getenv("GUARDRAIL_TIMEOUT_SEC", "2.0"))
+GUARDRAIL_ACTION = os.getenv("GUARDRAIL_ACTION", "audit_only").lower()
+GUARDRAIL_FAIL_CLOSED = os.getenv("GUARDRAIL_FAIL_CLOSED", "0").lower() in {"1", "true", "yes"}
 
 
 def _norm_question(text: str) -> str:
@@ -41,6 +50,44 @@ def _thai_today() -> str:
     # Keep this only for API smoke tests. Competition answers still go through the pipeline.
     names = ["วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์", "วันเสาร์", "วันอาทิตย์"]
     return names[pd.Timestamp.now(tz="Asia/Bangkok").weekday()]
+
+
+def _guardrail_enabled() -> bool:
+    return bool(GUARDRAIL_URL)
+
+
+def _guardrail_predict(text: str) -> dict[str, Any]:
+    if not _guardrail_enabled():
+        return {"enabled": False}
+
+    payload: dict[str, Any] = {
+        "model": GUARDRAIL_MODEL,
+        "text": text,
+        "max_length": GUARDRAIL_MAX_LENGTH,
+    }
+    if GUARDRAIL_THRESHOLD not in {None, ""}:
+        payload["threshold"] = float(GUARDRAIL_THRESHOLD)
+
+    req = urllib.request.Request(
+        f"{GUARDRAIL_URL}/predict",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=GUARDRAIL_TIMEOUT_SEC) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        data["enabled"] = True
+        data["action"] = GUARDRAIL_ACTION
+        return data
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
+        return {
+            "enabled": True,
+            "error": str(exc),
+            "is_attack": bool(GUARDRAIL_FAIL_CLOSED),
+            "action": GUARDRAIL_ACTION,
+            "fail_closed": GUARDRAIL_FAIL_CLOSED,
+        }
 
 
 class ChatPayload(BaseModel):
@@ -165,6 +212,7 @@ def _save_api_debug(qid: str, question: str, answer: str, obs: dict[str, Any], s
         "seconds": round(seconds, 3),
         "sql_backend": getattr(state.sqltool, "backend", None) if state else None,
         "qdrant_enabled": bool(state and state.qdrant_retriever and state.qdrant_retriever.ok),
+        "guardrail_enabled": _guardrail_enabled(),
         "observation": obs,
     }
     with (API_OUTPUT_DIR / "api_requests.jsonl").open("a", encoding="utf-8") as f:
@@ -185,6 +233,9 @@ def _save_api_debug(qid: str, question: str, answer: str, obs: dict[str, Any], s
         "sql_error": getattr(state.sqltool, "error", None) if state else None,
         "qdrant_enabled": bool(state and state.qdrant_retriever and state.qdrant_retriever.ok),
         "qdrant_collection": getattr(state.qdrant_retriever, "collection", None) if state and state.qdrant_retriever else None,
+        "guardrail_enabled": _guardrail_enabled(),
+        "guardrail_url": GUARDRAIL_URL or None,
+        "guardrail_action": GUARDRAIL_ACTION,
     }
     (API_OUTPUT_DIR / "api_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
 
@@ -275,6 +326,10 @@ def health() -> dict[str, Any]:
         "api_cache_size": len(state.answer_cache),
         "api_cache_hits": state.cache_hits,
         "api_cache_misses": state.cache_misses,
+        "guardrail_enabled": _guardrail_enabled(),
+        "guardrail_url": GUARDRAIL_URL or None,
+        "guardrail_action": GUARDRAIL_ACTION,
+        "guardrail_fail_closed": GUARDRAIL_FAIL_CLOSED,
     }
 
 
@@ -287,6 +342,13 @@ async def chat(req: ChatRequest) -> ChatResponse:
     question = _norm_question(req.data.question)
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
+
+    guardrail = _guardrail_predict(question)
+    if guardrail.get("enabled") and guardrail.get("is_attack") and GUARDRAIL_ACTION in {"reject", "block"}:
+        qid = req.data.id or state.question_to_id.get(question) or "API-Q"
+        answer = "ขอปฏิเสธคำสั่งที่อาจเป็น prompt injection — จะตอบจากข้อมูลในระบบเท่านั้น"
+        _save_api_debug(qid, question, answer, {"guardrail": guardrail, "blocked": True}, 0.0)
+        return ChatResponse(data=ChatAnswer(answer=answer))
 
     # Cheap health/smoke-test answer; real competition questions still use the agent pipeline.
     if _looks_like_day_question(question):
@@ -312,6 +374,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
             qid,
             question,
         )
+    obs["guardrail"] = guardrail
 
     seconds = time.time() - t0
     if ENABLE_API_CACHE:

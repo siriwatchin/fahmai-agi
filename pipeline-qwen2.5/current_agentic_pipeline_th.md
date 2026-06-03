@@ -228,6 +228,58 @@ API outputs:
 ~/bank500/api_llm_audit.jsonl
 ```
 
+## Guardrail API Integration
+
+มี guardrail API แยกที่ตรวจ prompt-injection / attack text ได้ตาม spec:
+
+```text
+POST http://127.0.0.1:8000/predict
+GET  http://127.0.0.1:8000/health
+```
+
+pipeline API หลักรองรับ guardrail แล้วผ่าน env:
+
+```bash
+export GUARDRAIL_URL="http://127.0.0.1:8000"
+export GUARDRAIL_MODEL="model"
+export GUARDRAIL_THRESHOLD="0.75"
+export GUARDRAIL_ACTION="audit_only"
+export GUARDRAIL_FAIL_CLOSED="0"
+```
+
+โหมดที่แนะนำ:
+
+- `GUARDRAIL_ACTION=audit_only`: เหมาะกับ Kaggle/backtest เพราะข้อ injection ต้องตอบแบบต้านคำสั่งฝัง ไม่ใช่ hard reject เสมอไป
+- `GUARDRAIL_ACTION=reject`: เหมาะกับ production API ถ้า guardrail บอก `is_attack=true` จะตอบ refusal ทันที ไม่ส่งต่อให้ Qwen
+- `GUARDRAIL_FAIL_CLOSED=1`: ถ้า guardrail ล่มให้ reject ไปเลย เหมาะกับ production ที่เน้น safety
+
+ตัวอย่าง run แบบ secure API:
+
+```bash
+# terminal 1: guardrail server
+# รัน guardrail FastAPI ของทีมให้ฟังที่ port 8000
+curl -s http://127.0.0.1:8000/health
+
+# terminal 2: FahMai answer API
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+
+export GUARDRAIL_URL="http://127.0.0.1:8000"
+export GUARDRAIL_ACTION="reject"
+export GUARDRAIL_THRESHOLD="0.75"
+
+uvicorn api_server:app --host 0.0.0.0 --port 8888
+```
+
+`GET /health` ของ FahMai API จะแสดง:
+
+```text
+guardrail_enabled
+guardrail_url
+guardrail_action
+guardrail_fail_closed
+```
+
 ## Audit Log ปัจจุบัน
 
 มี 4 ระดับ
