@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def default_run_dir() -> Path:
-    return ROOT / "outputs" / "runs" / f"local_7b_api_{time.strftime('%Y%m%d-%H%M%S')}"
+    return ROOT / "pipeline-typhoon-local-7b"
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -92,7 +92,46 @@ def append_jsonl(path: Path, rec: dict[str, Any]) -> None:
         f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
 
 
-def write_audit_files(run_dir: Path, audit_rows: list[dict[str, Any]]) -> None:
+def audit_record(
+    *,
+    request_uuid: str,
+    qid: str,
+    route: str,
+    question: str,
+    answer: str,
+    total_output_token: int,
+    request_seconds: float,
+    sources: list[Any] | None = None,
+    token_usage: dict[str, Any] | None = None,
+    token_log: list[Any] | None = None,
+    llm_audit: list[Any] | None = None,
+    tool_audit: list[Any] | None = None,
+    tool_summary: dict[str, Any] | None = None,
+    runtime: dict[str, Any] | None = None,
+    observation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": request_uuid,
+        "qid": qid,
+        "route": route,
+        "question": question,
+        "answer": answer,
+        "total_output_token": total_output_token,
+        "request_seconds": request_seconds,
+        "sources": sources or [],
+        "refs": sources or [],
+        "token_usage": token_usage or {},
+        "token_log": token_log or [],
+        "llm_audit": llm_audit or [],
+        "tool_audit": tool_audit or [],
+        "tool_summary": tool_summary or {},
+        "runtime": runtime or {},
+        "observation": observation or {},
+    }
+
+
+def write_audit_files(audit_dir: Path, audit_rows: list[dict[str, Any]]) -> None:
+    audit_dir.mkdir(parents=True, exist_ok=True)
     llm_rows: list[dict[str, Any]] = []
     tool_rows: list[dict[str, Any]] = []
     token_rows: list[dict[str, Any]] = []
@@ -121,27 +160,38 @@ def write_audit_files(run_dir: Path, audit_rows: list[dict[str, Any]]) -> None:
                 "ok": rec.get("ok"),
             }
         )
-        for ref in rec.get("refs") or []:
+        for tool_event in rec.get("tool_audit") or []:
             tool_rows.append(
                 {
                     "ts": rec.get("ts"),
-                    "request_uuid": rec.get("request_uuid"),
-                    "id": rec.get("id"),
+                    "request_uuid": rec.get("id"),
+                    "id": rec.get("qid"),
+                    "tool": tool_event.get("tool"),
+                    "output_obj": tool_event,
+                    "ok": True,
+                }
+            )
+        for ref in rec.get("refs") or rec.get("sources") or []:
+            tool_rows.append(
+                {
+                    "ts": rec.get("ts"),
+                    "request_uuid": rec.get("id"),
+                    "id": rec.get("qid"),
                     "tool": "reference",
                     "output_obj": ref,
                     "ok": True,
                 }
             )
 
-    with (run_dir / "api_llm_audit.jsonl").open("w", encoding="utf-8") as f:
+    with (audit_dir / "api_llm_audit.jsonl").open("w", encoding="utf-8") as f:
         for row in llm_rows:
             f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
 
-    with (run_dir / "api_tool_audit.jsonl").open("w", encoding="utf-8") as f:
+    with (audit_dir / "api_tool_audit.jsonl").open("w", encoding="utf-8") as f:
         for row in tool_rows:
             f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
 
-    with (run_dir / "api_token_usage.csv").open("w", encoding="utf-8", newline="") as f:
+    with (audit_dir / "api_token_usage.csv").open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["request_uuid", "id", "prompt_tokens", "completion_tokens", "total_tokens", "seconds"])
         writer.writeheader()
         writer.writerows(token_rows)
@@ -165,8 +215,8 @@ def write_audit_files(run_dir: Path, audit_rows: list[dict[str, Any]]) -> None:
         "tool_audit_rows": len(tool_rows),
         "tool_summary": tool_summary,
     }
-    (run_dir / "api_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    (run_dir / "api_tool_summary.json").write_text(json.dumps(tool_summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    (audit_dir / "api_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    (audit_dir / "api_tool_summary.json").write_text(json.dumps(tool_summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
 def write_report(path: Path, *, api_url: str, audit_rows: list[dict[str, Any]], total_seconds: float, output: Path) -> None:
@@ -177,7 +227,8 @@ def write_report(path: Path, *, api_url: str, audit_rows: list[dict[str, Any]], 
     rows = []
 
     for rec in audit_rows:
-        status = rec.get("status") or "unknown"
+        observation = rec.get("observation") or {}
+        status = observation.get("status") or rec.get("status") or "unknown"
         status_counts[status] = status_counts.get(status, 0) + 1
         answer = rec.get("answer") or ""
         if looks_like_tool_leak(answer):
@@ -187,7 +238,7 @@ def write_report(path: Path, *, api_url: str, audit_rows: list[dict[str, Any]], 
         usage = rec.get("token_usage") or {}
         for key in total_tokens:
             total_tokens[key] += int(usage.get(key) or 0)
-        refs = rec.get("refs") or []
+        refs = rec.get("refs") or rec.get("sources") or []
         ref_text = ", ".join(f"{r.get('type')}:{r.get('source')}" for r in refs[:8] if isinstance(r, dict)) or "-"
         rows.append(f"- {rec.get('id')}: status={status}, seconds={rec.get('seconds')}, refs={ref_text}, answer={answer[:180]}")
 
@@ -239,11 +290,15 @@ def main() -> None:
 
     run_dir = args.run_dir or default_run_dir()
     run_dir.mkdir(parents=True, exist_ok=True)
-    output = run_dir / "submission.csv"
-    debug_path = run_dir / "api_client_debug.json"
-    report_path = run_dir / "api_client_report.md"
-    request_log_path = run_dir / "api_requests.jsonl"
-    meta_path = run_dir / "run_meta.json"
+    answers_dir = ROOT / "pipeline-typhoon-local-7b" / "answers"
+    audit_dir = ROOT / "pipeline-typhoon-local-7b" / "audit_logs"
+    answers_dir.mkdir(parents=True, exist_ok=True)
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    output = answers_dir / "submission.csv"
+    debug_path = audit_dir / "api_client_debug.json"
+    report_path = audit_dir / "api_client_report.md"
+    request_log_path = audit_dir / "api_requests.jsonl"
+    meta_path = audit_dir / "run_meta.json"
 
     questions = read_csv(args.questions)
     sample_ids = [r["id"] for r in read_csv(args.sample)]
@@ -259,6 +314,8 @@ def main() -> None:
         "questions": str(args.questions),
         "sample": str(args.sample),
         "run_dir": str(run_dir),
+        "answers_dir": str(answers_dir),
+        "audit_dir": str(audit_dir),
         "limit": args.limit,
         "offset": args.offset,
         "use_answer_bank": args.use_answer_bank,
@@ -283,20 +340,21 @@ def main() -> None:
         request_uuid = str(uuid.uuid4())
         if not row:
             answers[qid] = ""
-            rec = {
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "request_uuid": request_uuid,
-                "route": "/api/v1/chat",
-                "id": qid,
-                "question": "",
-                "answer": "",
-                "status": "missing_question",
-                "ok": False,
-                "error": "missing question in questions.csv",
-            }
-            debug[qid] = rec
-            audit_rows.append(rec)
-            append_jsonl(request_log_path, rec)
+            audit_rec = audit_record(
+                request_uuid=request_uuid,
+                qid=qid,
+                route="/api/v1/chat",
+                question="",
+                answer="",
+                total_output_token=0,
+                request_seconds=0,
+                observation={"status": "missing_question", "error": "missing question in questions.csv"},
+            )
+            debug_rec = dict(audit_rec)
+            debug_rec.update({"request_uuid": request_uuid, "status": "missing_question", "ok": False, "error": "missing question in questions.csv"})
+            debug[qid] = debug_rec
+            audit_rows.append(audit_rec)
+            append_jsonl(request_log_path, audit_rec)
             continue
 
         payload = {
@@ -317,60 +375,90 @@ def main() -> None:
             raw_answer = item.get("answer", "")
             answer, answer_ok, answer_decision = finalize_submission_answer(item, row["question"])
             answers[qid] = answer
-            rec = {
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "request_uuid": request_uuid,
-                "route": "/api/v1/chat",
-                "id": qid,
-                "question": row["question"],
-                "answer": answer,
-                "raw_answer": raw_answer,
-                "answer_decision": answer_decision,
-                "total_output_token": count_output_tokens(answer),
-                "seconds": round(time.time() - t0, 3),
-                "api_seconds": item.get("seconds"),
-                "status": item.get("status"),
-                "confidence": item.get("confidence"),
-                "refs": item.get("refs") or [],
-                "security": item.get("security") or {},
-                "route_meta": item.get("route") or {},
-                "token_usage": item.get("token_usage") or {},
-                "answer_bank": item.get("answer_bank"),
-                "run_log": item.get("run_log"),
-                "qdrant_loaded": (item.get("route") or {}).get("qdrant_loaded"),
-                "tool_call_leak": looks_like_tool_leak(str(raw_answer or "")),
-                "ok": answer_ok,
-                "model": "local-7b",
-            }
-            debug[qid] = rec
-            audit_rows.append(rec)
-            append_jsonl(request_log_path, rec)
+            request_seconds = round(time.time() - t0, 3)
+            route_meta = item.get("route") or {}
+            tool_audit = route_meta.get("repair_trace") or []
+            tool_summary: dict[str, Any] = {}
+            for tool_event in tool_audit:
+                tool = tool_event.get("tool") if isinstance(tool_event, dict) else None
+                if tool:
+                    tool_summary[tool] = int(tool_summary.get(tool) or 0) + 1
+            audit_rec = audit_record(
+                request_uuid=request_uuid,
+                qid=qid,
+                route="/api/v1/chat",
+                question=row["question"],
+                answer=answer,
+                total_output_token=count_output_tokens(answer),
+                request_seconds=request_seconds,
+                sources=item.get("refs") or [],
+                token_usage=item.get("token_usage") or {},
+                token_log=[],
+                llm_audit=[],
+                tool_audit=tool_audit,
+                tool_summary=tool_summary,
+                runtime={
+                    "model": "local-7b",
+                    "api_seconds": item.get("seconds"),
+                    "answer_bank": item.get("answer_bank"),
+                    "run_log": item.get("run_log"),
+                    "qdrant_loaded": route_meta.get("qdrant_loaded"),
+                },
+                observation={
+                    "raw_answer": raw_answer,
+                    "answer_decision": answer_decision,
+                    "status": item.get("status"),
+                    "confidence": item.get("confidence"),
+                    "security": item.get("security") or {},
+                    "route_meta": route_meta,
+                    "tool_call_leak": looks_like_tool_leak(str(raw_answer or "")),
+                    "ok": answer_ok,
+                },
+            )
+            debug_rec = dict(audit_rec)
+            debug_rec.update(
+                {
+                    "request_uuid": request_uuid,
+                    "status": item.get("status"),
+                    "confidence": item.get("confidence"),
+                    "refs": item.get("refs") or [],
+                    "seconds": request_seconds,
+                    "token_usage": item.get("token_usage") or {},
+                    "ok": answer_ok,
+                    "model": "local-7b",
+                    "answer_decision": answer_decision,
+                    "raw_answer": raw_answer,
+                }
+            )
+            debug[qid] = debug_rec
+            audit_rows.append(audit_rec)
+            append_jsonl(request_log_path, audit_rec)
             print(f"  -> {answer[:180]}", flush=True)
             print(f"  status={item.get('status')} seconds={item.get('seconds')} refs={len(item.get('refs') or [])}", flush=True)
         except Exception as exc:
             answers[qid] = "ไม่พบคำตอบในชุดข้อมูล"
-            rec = {
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "request_uuid": request_uuid,
-                "route": "/api/v1/chat",
-                "id": qid,
-                "question": row["question"],
-                "answer": answers[qid],
-                "total_output_token": count_output_tokens(answers[qid]),
-                "seconds": round(time.time() - t0, 3),
-                "status": "error",
-                "ok": False,
-                "error": repr(exc),
-                "model": "local-7b",
-            }
-            debug[qid] = rec
-            audit_rows.append(rec)
-            append_jsonl(request_log_path, rec)
+            request_seconds = round(time.time() - t0, 3)
+            audit_rec = audit_record(
+                request_uuid=request_uuid,
+                qid=qid,
+                route="/api/v1/chat",
+                question=row["question"],
+                answer=answers[qid],
+                total_output_token=count_output_tokens(answers[qid]),
+                request_seconds=request_seconds,
+                observation={"status": "error", "error": repr(exc), "ok": False},
+                runtime={"model": "local-7b"},
+            )
+            debug_rec = dict(audit_rec)
+            debug_rec.update({"request_uuid": request_uuid, "status": "error", "ok": False, "error": repr(exc), "model": "local-7b", "seconds": request_seconds})
+            debug[qid] = debug_rec
+            audit_rows.append(audit_rec)
+            append_jsonl(request_log_path, audit_rec)
             print(f"  ERROR: {exc}", flush=True)
 
         write_submission(output, target_ids, answers)
         debug_path.write_text(json.dumps(debug, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        write_audit_files(run_dir, audit_rows)
+        write_audit_files(audit_dir, audit_rows)
 
     total_seconds = time.time() - start
     write_report(report_path, api_url=args.api_url, audit_rows=audit_rows, total_seconds=total_seconds, output=output)
@@ -379,6 +467,8 @@ def main() -> None:
             {
                 "ok": True,
                 "run_dir": str(run_dir),
+                "answers_dir": str(answers_dir),
+                "audit_dir": str(audit_dir),
                 "submission": str(output),
                 "debug": str(debug_path),
                 "report": str(report_path),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -69,7 +70,94 @@ def _execute_tool(name: str, args: dict[str, Any]) -> str:
     return hosted_api.state.registry.call_tool(name, args)
 
 
+def _read_tool_json(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return json.loads(_execute_tool(name, args))
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _apply_trace_validation(answer_obj: Any, trace: list[dict[str, Any]], route: dict[str, Any] | None = None) -> Any:
+    route_meta = route or {"intent_type": "local_7b_repair"}
+    validation = hosted_api.pipeline.validate_final_answer(
+        answer_obj.answer,
+        trace,
+        route_meta,
+        answer_obj.security or {},
+    )
+    answer_obj.answer = validation.get("answer") or answer_obj.answer
+    answer_obj.status = validation.get("status") or answer_obj.status
+    answer_obj.confidence = validation.get("confidence") or answer_obj.confidence
+    answer_obj.refs = validation.get("refs", [])
+    answer_obj.security = validation.get("security", answer_obj.security or {})
+    answer_obj.route = {
+        **(validation.get("route") or route_meta),
+        "repair_trace": [
+            {
+                "step": item.get("step"),
+                "tool": item.get("tool"),
+                "arguments": item.get("arguments"),
+            }
+            for item in trace
+            if item.get("tool")
+        ],
+    }
+    return answer_obj
+
+
+def _money(value: Any) -> str:
+    try:
+        return f"{float(value):,.0f}"
+    except Exception:
+        return str(value)
+
+
+def _deterministic_easy_answer(question: str) -> tuple[str | None, dict[str, Any]]:
+    q = str(question or "")
+    sku_match = re.search(r"\b[A-Z]{2,}[A-Z0-9-]*-\d{3,4}\b", q)
+    if sku_match and any(word.lower() in q.lower() for word in ["msrp", "ราคา", "เท่าไหร่"]):
+        sku = sku_match.group(0)
+        sql = (
+            "SELECT sku_id, product_name, msrp_thb "
+            "FROM DIM_PRODUCT "
+            f"WHERE sku_id = '{sku}' "
+            "LIMIT 1"
+        )
+        data = _read_tool_json("postgres_execute_readonly_sql", {"sql": sql, "limit": 1})
+        rows = data.get("rows") or []
+        if data.get("ok") and rows:
+            row = rows[0]
+            answer = f"MSRP ของสินค้ารหัส {row.get('sku_id', sku)} คือ {_money(row.get('msrp_thb'))} บาท"
+            validation = {
+                "status": "answered",
+                "confidence": "high",
+                "refs": [{"type": "postgres", "source": "DIM_PRODUCT", "sql": sql}],
+                "security": {},
+                "route": {"intent_type": "deterministic_7b_easy", "tool": "postgres_execute_readonly_sql"},
+            }
+            return answer, {"validation": validation, "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+    return None, {}
+
+
 async def _answer_payload_7b(payload: Any) -> Any:
+    if hosted_api.state is not None:
+        det_answer, det_trace = await asyncio.to_thread(_deterministic_easy_answer, payload.question)
+        if det_answer:
+            answer_obj = hosted_api.ChatAnswer(
+                id=payload.id or "API-Q",
+                answer=det_answer,
+                status=det_trace["validation"].get("status"),
+                confidence=det_trace["validation"].get("confidence"),
+                refs=det_trace["validation"].get("refs", []),
+                security=det_trace["validation"].get("security", {}),
+                route=det_trace["validation"].get("route", {}),
+                run_log=None,
+                seconds=0.0,
+                token_usage=det_trace.get("usage", {}),
+                answer_bank=payload.use_answer_bank,
+            )
+            return answer_obj
+
     answer_obj = await _base_answer_payload(payload)
     first = _tool_call_from_answer(answer_obj.answer)
     if not first or hosted_api.state is None:
@@ -97,6 +185,16 @@ async def _answer_payload_7b(payload: Any) -> Any:
         except Exception as exc:
             answer_obj.answer = f"ไม่สามารถเรียกใช้เครื่องมือ {name} ได้: {exc}"
             answer_obj.status = "error"
+            answer_obj.refs = hosted_api.pipeline.refs_from_trace(trace)
+            answer_obj.route = {
+                "intent_type": "local_7b_repair",
+                "repair_error_tool": name,
+                "repair_trace": [
+                    {"step": item.get("step"), "tool": item.get("tool"), "arguments": item.get("arguments")}
+                    for item in trace
+                    if item.get("tool")
+                ],
+            }
             return answer_obj
 
         compact = _compact_tool_result(result)
@@ -149,13 +247,13 @@ async def _answer_payload_7b(payload: Any) -> Any:
             answer_obj.status = "answered"
             answer_obj.seconds = round((answer_obj.seconds or 0) + (time.time() - started), 3)
             answer_obj.token_usage = token_usage
-            return answer_obj
+            return _apply_trace_validation(answer_obj, trace)
 
     answer_obj.answer = "ไม่พบคำตอบในชุดข้อมูล"
     answer_obj.status = "needs_review"
     answer_obj.seconds = round((answer_obj.seconds or 0) + (time.time() - started), 3)
     answer_obj.token_usage = token_usage
-    return answer_obj
+    return _apply_trace_validation(answer_obj, trace)
 
 
 hosted_api._answer_payload = _answer_payload_7b
