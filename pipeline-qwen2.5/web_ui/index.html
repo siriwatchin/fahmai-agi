@@ -6,568 +6,451 @@
   <title>FahMai Agent Chat</title>
   <style>
     :root {
-      --bg: #f6f3ee;
-      --surface: #fffcf6;
-      --surface-2: #ebe5d8;
-      --surface-3: #ded7ca;
-      --text: #1f2928;
-      --muted: #687571;
-      --line: #d5ccbc;
-      --accent: #0f766e;
-      --accent-2: #144e5a;
-      --good: #15803d;
-      --warn: #b7791f;
-      --bad: #b42318;
-      --shadow: 0 18px 44px rgba(55, 45, 32, .13);
-      --radius: 8px;
+      --bg: #0b0d10;
+      --bg-2: #11151b;
+      --panel: #1d2026;
+      --panel-2: #24272d;
+      --line: #30343d;
+      --line-2: #424651;
+      --text: #f3f4f6;
+      --muted: #a6abb4;
+      --soft: #d7dbe1;
+      --accent: #7dd3fc;
+      --accent-2: #a78bfa;
+      --good: #54d38a;
+      --warn: #f0bd64;
+      --bad: #ff7272;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .36);
     }
 
     * {
       box-sizing: border-box;
     }
 
-    html, body {
+    html,
+    body {
+      width: 100%;
       height: 100%;
       margin: 0;
-      color: var(--text);
       background:
-        linear-gradient(180deg, rgba(15, 118, 110, .08), transparent 28%),
-        var(--bg);
+        radial-gradient(ellipse at 50% 62%, rgba(28, 51, 118, .52), transparent 42%),
+        radial-gradient(circle at 48% 45%, rgba(31, 36, 54, .52), transparent 38%),
+        linear-gradient(180deg, #101114 0%, #090a0c 100%);
+      color: var(--text);
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       letter-spacing: 0;
-    }
-
-    body {
-      min-height: 100%;
       overflow: hidden;
     }
 
-    button, textarea, select {
+    button,
+    textarea {
       font: inherit;
     }
 
     button {
-      border-radius: var(--radius);
+      border: 0;
+      color: inherit;
+      cursor: pointer;
+      background: transparent;
     }
 
     .app {
-      height: 100vh;
+      width: 100%;
+      height: 100%;
       display: grid;
-      grid-template-columns: 312px minmax(0, 1fr);
+      grid-template-columns: 72px minmax(0, 1fr);
     }
 
-    .sidebar {
-      min-height: 0;
+    .rail {
+      height: 100%;
       display: grid;
-      grid-template-rows: auto auto 1fr auto;
-      border-right: 1px solid var(--line);
-      background: rgba(255, 252, 246, .78);
+      grid-template-rows: auto 1fr auto;
+      align-items: start;
+      padding: 18px 12px;
+      background: rgba(9, 10, 12, .36);
       backdrop-filter: blur(18px);
+      border-right: 1px solid rgba(255, 255, 255, .04);
+      z-index: 4;
     }
 
-    .brand {
-      padding: 22px 20px 18px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .brand-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-width: 0;
-    }
-
-    .mark {
-      width: 40px;
-      height: 40px;
+    .logo {
+      width: 44px;
+      height: 44px;
       display: grid;
       place-items: center;
-      flex: 0 0 auto;
-      color: #fff;
-      background: var(--accent-2);
-      border: 1px solid rgba(20, 78, 90, .25);
+      border-radius: 50%;
       font-weight: 800;
-      letter-spacing: 0;
+      background: linear-gradient(135deg, #34d399, #60a5fa, #a78bfa);
+      color: #081014;
+      box-shadow: 0 0 30px rgba(96, 165, 250, .28);
     }
 
-    h1 {
-      margin: 0;
-      font-size: 20px;
-      line-height: 1.1;
-      letter-spacing: 0;
-    }
-
-    .tagline {
-      margin-top: 5px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .status {
-      display: grid;
-      gap: 8px;
-      padding: 14px 20px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .status-row {
-      min-height: 32px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .status-row strong {
-      color: var(--text);
-      font-weight: 650;
-    }
-
-    .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 999px;
-      background: var(--warn);
-      box-shadow: 0 0 0 3px rgba(183, 121, 31, .14);
-      flex: 0 0 auto;
-    }
-
-    .dot.ok {
-      background: var(--good);
-      box-shadow: 0 0 0 3px rgba(21, 128, 61, .14);
-    }
-
-    .dot.bad {
-      background: var(--bad);
-      box-shadow: 0 0 0 3px rgba(180, 35, 24, .14);
-    }
-
-    .samples {
-      min-height: 0;
-      overflow: auto;
-      padding: 18px 14px 20px;
-    }
-
-    .section-label {
-      padding: 0 6px 10px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: .08em;
-    }
-
-    .sample {
-      width: 100%;
-      display: block;
-      margin: 0 0 8px;
-      padding: 12px 13px;
-      border: 1px solid transparent;
-      background: transparent;
-      color: var(--text);
-      text-align: left;
-      cursor: pointer;
-      line-height: 1.4;
-      transition: background .14s ease, border-color .14s ease;
-    }
-
-    .sample:hover {
-      background: rgba(15, 118, 110, .08);
-      border-color: rgba(15, 118, 110, .18);
-    }
-
-    .sidebar-actions {
+    .rail-actions {
       display: grid;
       gap: 10px;
-      padding: 16px 20px 20px;
-      border-top: 1px solid var(--line);
+      margin-top: 28px;
     }
 
-    .control {
+    .icon-btn {
+      width: 44px;
+      height: 44px;
       display: grid;
-      gap: 6px;
+      place-items: center;
+      border-radius: 50%;
+      color: var(--soft);
+      background: rgba(255, 255, 255, .055);
     }
 
-    label {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 650;
+    .icon-btn:hover {
+      background: rgba(255, 255, 255, .1);
     }
 
-    select {
-      width: 100%;
-      min-height: 40px;
-      border: 1px solid var(--line);
-      background: var(--surface);
-      color: var(--text);
-      padding: 8px 10px;
-      outline: none;
-      appearance: none;
-    }
-
-    select:focus, textarea:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(15, 118, 110, .12);
-    }
-
-    .ghost {
-      min-height: 40px;
-      border: 1px solid var(--line);
-      background: transparent;
-      color: var(--accent-2);
-      cursor: pointer;
-      font-weight: 700;
-    }
-
-    .ghost:hover {
-      background: rgba(20, 78, 90, .08);
+    .rail-bottom {
+      display: grid;
+      gap: 10px;
     }
 
     .main {
-      height: 100vh;
       min-width: 0;
+      height: 100vh;
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-rows: auto minmax(0, 1fr);
+      position: relative;
     }
 
     .topbar {
-      min-height: 68px;
+      height: 66px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      padding: 16px clamp(18px, 3vw, 34px);
-      border-bottom: 1px solid var(--line);
-      background: rgba(246, 243, 238, .82);
-      backdrop-filter: blur(14px);
-      z-index: 2;
-    }
-
-    .top-title {
-      min-width: 0;
-    }
-
-    .top-title h2 {
-      margin: 0;
-      font-size: 18px;
-      line-height: 1.2;
-      letter-spacing: 0;
-    }
-
-    .top-title p {
-      margin: 4px 0 0;
+      padding: 0 clamp(18px, 3vw, 34px);
       color: var(--muted);
-      font-size: 13px;
+      z-index: 3;
     }
 
-    .health-pills {
+    .brand-text {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-size: 14px;
+    }
+
+    .spark {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: conic-gradient(from 180deg, #7dd3fc, #a78bfa, #54d38a, #7dd3fc);
+      filter: saturate(1.3);
+      box-shadow: 0 0 24px rgba(125, 211, 252, .36);
+      flex: 0 0 auto;
+    }
+
+    .health {
       display: flex;
       justify-content: flex-end;
+      align-items: center;
       gap: 8px;
       flex-wrap: wrap;
     }
 
     .pill {
-      min-height: 32px;
+      min-height: 30px;
       display: inline-flex;
       align-items: center;
       gap: 7px;
-      padding: 6px 10px;
-      border: 1px solid var(--line);
-      background: rgba(255, 252, 246, .82);
+      padding: 5px 10px;
+      border: 1px solid rgba(255, 255, 255, .08);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .045);
       color: var(--muted);
       font-size: 12px;
       white-space: nowrap;
     }
 
-    .chat {
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--warn);
+      box-shadow: 0 0 0 3px rgba(240, 189, 100, .12);
+    }
+
+    .dot.ok {
+      background: var(--good);
+      box-shadow: 0 0 0 3px rgba(84, 211, 138, .12);
+    }
+
+    .dot.bad {
+      background: var(--bad);
+      box-shadow: 0 0 0 3px rgba(255, 114, 114, .12);
+    }
+
+    .stage {
       min-height: 0;
       overflow: auto;
       scroll-behavior: smooth;
+      padding: 0 18px 170px;
     }
 
-    .chat-inner {
-      width: min(880px, calc(100vw - 360px));
-      min-height: 100%;
-      margin: 0 auto;
-      padding: 26px 18px 18px;
+    .center {
+      min-height: calc(100vh - 66px);
       display: grid;
-      align-content: start;
-      gap: 18px;
+      place-items: center;
+      padding-bottom: 9vh;
     }
 
-    .welcome {
-      margin: 11vh auto 0;
-      max-width: 680px;
+    .hero {
+      width: min(900px, calc(100vw - 132px));
+      display: grid;
+      justify-items: center;
+      gap: 24px;
       text-align: center;
+      transform: translateY(-18px);
     }
 
-    .welcome h2 {
+    .hero h1 {
       margin: 0;
-      font-size: clamp(28px, 4vw, 46px);
+      font-size: clamp(34px, 4.5vw, 58px);
       line-height: 1.08;
+      font-weight: 440;
+      color: rgba(245, 247, 251, .92);
       letter-spacing: 0;
     }
 
-    .welcome p {
-      max-width: 560px;
-      margin: 14px auto 0;
-      color: var(--muted);
-      line-height: 1.6;
-      font-size: 16px;
-    }
-
-    .welcome-grid {
-      margin-top: 24px;
+    .prompt-card {
+      width: min(760px, 100%);
+      min-height: 76px;
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
       gap: 10px;
+      padding: 10px 12px 10px 18px;
+      border-radius: 999px;
+      background: rgba(35, 37, 43, .96);
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(255, 255, 255, .07);
     }
 
-    .welcome-card {
-      border: 1px solid var(--line);
-      background: rgba(255, 252, 246, .66);
-      padding: 14px;
-      text-align: left;
-      color: var(--text);
-      cursor: pointer;
-      line-height: 1.42;
-    }
-
-    .welcome-card:hover {
-      border-color: rgba(15, 118, 110, .34);
-      background: rgba(15, 118, 110, .06);
-    }
-
-    .message {
-      display: grid;
-      grid-template-columns: 38px minmax(0, 1fr);
-      gap: 12px;
-      align-items: start;
-    }
-
-    .message.user {
-      grid-template-columns: minmax(0, 1fr) 38px;
-    }
-
-    .avatar {
+    .plus {
       width: 38px;
       height: 38px;
-      border: 1px solid var(--line);
-      background: var(--surface);
       display: grid;
       place-items: center;
-      color: var(--accent-2);
-      font-size: 13px;
-      font-weight: 800;
-      flex: 0 0 auto;
+      border-radius: 50%;
+      color: var(--soft);
+      font-size: 30px;
+      font-weight: 200;
     }
 
-    .message.user .avatar {
-      grid-column: 2;
-      background: var(--accent-2);
-      color: #fff;
-      border-color: var(--accent-2);
-    }
-
-    .bubble {
-      min-width: 0;
-      padding: 16px 18px;
-      border: 1px solid var(--line);
-      background: rgba(255, 252, 246, .88);
-      box-shadow: 0 10px 26px rgba(55, 45, 32, .08);
-      line-height: 1.75;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-
-    .message.user .bubble {
-      grid-column: 1;
-      background: #123f47;
-      color: #fff;
-      border-color: #123f47;
-      justify-self: end;
-      max-width: min(720px, 90%);
-    }
-
-    .message.assistant .bubble {
-      max-width: 100%;
-    }
-
-    .meta {
-      margin-top: 12px;
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .meta span {
-      display: inline-flex;
-      align-items: center;
-      min-height: 28px;
-      padding: 4px 8px;
-      border: 1px solid var(--line);
-      background: rgba(235, 229, 216, .5);
-      color: var(--muted);
-      font-size: 12px;
-      white-space: nowrap;
-    }
-
-    details.debug {
-      margin-top: 12px;
-      border-top: 1px solid var(--line);
-      padding-top: 10px;
-    }
-
-    details.debug summary {
-      cursor: pointer;
-      color: var(--accent-2);
-      font-size: 13px;
-      font-weight: 700;
-      list-style-position: inside;
-    }
-
-    .debug-grid {
-      display: grid;
-      gap: 10px;
-      margin-top: 10px;
-    }
-
-    .debug-block {
-      border: 1px solid var(--line);
-      background: rgba(246, 243, 238, .65);
-      padding: 10px;
-    }
-
-    .debug-block h3 {
-      margin: 0 0 8px;
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: .08em;
-      color: var(--muted);
-    }
-
-    .debug-list {
-      display: grid;
-      gap: 7px;
-    }
-
-    .debug-item {
-      border: 1px solid rgba(213, 204, 188, .7);
-      background: rgba(255, 252, 246, .7);
-      padding: 9px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.45;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-
-    .debug-item b {
-      color: var(--text);
-    }
-
-    pre {
-      margin: 0;
-      max-height: 360px;
-      overflow: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 12px;
-      line-height: 1.55;
-      color: #394340;
-    }
-
-    .composer-wrap {
-      padding: 16px clamp(18px, 3vw, 34px) 20px;
-      border-top: 1px solid rgba(213, 204, 188, .85);
-      background: linear-gradient(180deg, rgba(246, 243, 238, .76), rgba(246, 243, 238, .96));
-    }
-
-    .composer {
-      width: min(880px, calc(100vw - 360px));
-      margin: 0 auto;
-      border: 1px solid var(--line);
-      background: var(--surface);
-      box-shadow: var(--shadow);
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 10px;
-      padding: 10px;
-      border-radius: 10px;
+    .plus:hover {
+      background: rgba(255, 255, 255, .075);
     }
 
     textarea {
       width: 100%;
-      min-height: 50px;
-      max-height: 170px;
-      resize: none;
+      min-height: 48px;
+      max-height: 150px;
+      padding: 12px 4px;
       border: 0;
-      outline: none;
-      padding: 12px 10px;
+      outline: 0;
+      resize: none;
       background: transparent;
       color: var(--text);
       line-height: 1.5;
-      font-size: 16px;
+      font-size: 18px;
+      overflow: auto;
+    }
+
+    textarea::placeholder {
+      color: rgba(227, 231, 236, .58);
     }
 
     .send {
-      min-width: 92px;
-      min-height: 46px;
-      border: 0;
-      background: var(--accent-2);
-      color: #fff;
-      cursor: pointer;
+      min-width: 54px;
+      height: 54px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: #071114;
+      background: #e8eef5;
+      font-size: 20px;
       font-weight: 800;
     }
 
     .send:hover {
-      background: #0f3f49;
+      filter: brightness(1.06);
     }
 
     .send:disabled {
       cursor: not-allowed;
-      opacity: .55;
+      opacity: .46;
     }
 
-    .composer-foot {
-      width: min(880px, calc(100vw - 360px));
-      margin: 8px auto 0;
+    .chips {
+      width: min(760px, 100%);
       display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      color: var(--muted);
+      justify-content: center;
+      gap: 9px;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      min-height: 34px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, .08);
+      background: rgba(255, 255, 255, .04);
+      color: rgba(231, 235, 241, .74);
+      font-size: 13px;
+    }
+
+    .chip:hover {
+      background: rgba(255, 255, 255, .08);
+      color: var(--text);
+    }
+
+    .thread {
+      width: min(900px, calc(100vw - 132px));
+      margin: 0 auto;
+      padding: 20px 0 0;
+      display: grid;
+      gap: 18px;
+    }
+
+    .message {
+      display: grid;
+      gap: 8px;
+    }
+
+    .message.user {
+      justify-items: end;
+    }
+
+    .bubble {
+      max-width: min(760px, 100%);
+      padding: 14px 18px;
+      border-radius: 22px;
+      line-height: 1.72;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 16px;
+    }
+
+    .message.user .bubble {
+      background: #2f333b;
+      color: var(--text);
+      border-bottom-right-radius: 6px;
+    }
+
+    .message.assistant .bubble {
+      background: transparent;
+      color: rgba(245, 247, 251, .94);
+      padding-left: 0;
+      border-radius: 0;
+    }
+
+    .meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .meta span {
+      min-height: 28px;
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 9px;
+      border: 1px solid rgba(255, 255, 255, .08);
+      border-radius: 999px;
+      color: rgba(213, 218, 226, .68);
+      background: rgba(255, 255, 255, .035);
       font-size: 12px;
     }
 
-    .thinking {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      color: var(--muted);
+    details.debug {
+      width: min(760px, 100%);
+      margin-top: 12px;
     }
 
-    .pulse {
-      width: 6px;
-      height: 6px;
-      border-radius: 999px;
-      background: var(--accent);
-      animation: pulse 1s ease-in-out infinite;
+    details.debug summary {
+      width: fit-content;
+      cursor: pointer;
+      color: rgba(213, 218, 226, .7);
+      font-size: 13px;
+      list-style-position: inside;
     }
 
-    .pulse:nth-child(2) {
-      animation-delay: .12s;
+    .debug-wrap {
+      display: grid;
+      gap: 9px;
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, .08);
+      background: rgba(255, 255, 255, .035);
     }
 
-    .pulse:nth-child(3) {
-      animation-delay: .24s;
+    .debug-title {
+      color: rgba(245, 247, 251, .86);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-top: 2px;
     }
 
-    @keyframes pulse {
-      0%, 80%, 100% { opacity: .25; transform: translateY(0); }
-      40% { opacity: 1; transform: translateY(-3px); }
+    .debug-item,
+    pre {
+      margin: 0;
+      padding: 10px;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, .16);
+      color: rgba(222, 227, 235, .72);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow: auto;
+      max-height: 300px;
+    }
+
+    .composer {
+      position: fixed;
+      left: 72px;
+      right: 0;
+      bottom: 0;
+      padding: 18px 18px 22px;
+      background: linear-gradient(180deg, transparent, rgba(9, 10, 12, .88) 26%, rgba(9, 10, 12, .98));
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity .18s ease, transform .18s ease;
+      z-index: 5;
+    }
+
+    body.has-chat .composer {
+      pointer-events: auto;
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .composer .prompt-card {
+      margin: 0 auto;
+      width: min(820px, calc(100vw - 132px));
+      min-height: 66px;
+    }
+
+    .composer textarea {
+      min-height: 42px;
+      font-size: 16px;
+    }
+
+    .composer .send {
+      min-width: 48px;
+      height: 48px;
     }
 
     .toast {
@@ -576,8 +459,9 @@
       bottom: 18px;
       max-width: min(460px, calc(100vw - 36px));
       padding: 12px 14px;
-      border: 1px solid var(--line);
-      background: var(--surface);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, .08);
+      background: rgba(35, 37, 43, .96);
       color: var(--text);
       box-shadow: var(--shadow);
       opacity: 0;
@@ -592,129 +476,128 @@
       transform: translateY(0);
     }
 
-    @media (max-width: 960px) {
-      body {
-        overflow: auto;
-      }
+    .thinking {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: rgba(213, 218, 226, .7);
+    }
 
+    .dots {
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .dots i {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    .dots i:nth-child(2) { animation-delay: .14s; }
+    .dots i:nth-child(3) { animation-delay: .28s; }
+
+    @keyframes pulse {
+      0%, 78%, 100% {
+        opacity: .25;
+        transform: translateY(0);
+      }
+      38% {
+        opacity: 1;
+        transform: translateY(-3px);
+      }
+    }
+
+    @media (max-width: 760px) {
       .app {
-        min-height: 100vh;
-        height: auto;
         grid-template-columns: 1fr;
       }
 
-      .sidebar {
+      .rail {
         display: none;
       }
 
-      .main {
-        min-height: 100vh;
+      .health {
+        display: none;
       }
 
-      .chat-inner,
-      .composer,
-      .composer-foot {
-        width: min(880px, calc(100vw - 28px));
+      .stage {
+        padding-inline: 14px;
       }
 
-      .topbar {
-        align-items: flex-start;
-        flex-direction: column;
+      .hero,
+      .thread {
+        width: min(900px, calc(100vw - 28px));
       }
 
-      .health-pills {
-        justify-content: flex-start;
+      .hero h1 {
+        font-size: 34px;
       }
 
-      .welcome {
-        margin-top: 4vh;
+      .composer {
+        left: 0;
       }
 
-      .welcome-grid {
-        grid-template-columns: 1fr;
+      .composer .prompt-card,
+      .prompt-card {
+        width: min(820px, calc(100vw - 28px));
       }
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-row">
-          <div class="mark">FM</div>
-          <div>
-            <h1>FahMai Chat</h1>
-            <div class="tagline">ถามข้อมูลบริษัทด้วย agent</div>
-          </div>
-        </div>
+    <aside class="rail">
+      <div class="logo">FM</div>
+      <div class="rail-actions">
+        <button class="icon-btn" id="newChatBtn" type="button" title="New chat">＋</button>
+        <button class="icon-btn" id="healthBtn" type="button" title="Refresh">↻</button>
       </div>
-
-      <div class="status" id="sideStatus">
-        <div class="status-row"><span>API</span><strong>checking</strong></div>
-        <div class="status-row"><span>SQL</span><strong>-</strong></div>
-        <div class="status-row"><span>Vector</span><strong>-</strong></div>
-      </div>
-
-      <div class="samples">
-        <div class="section-label">ตัวอย่างคำถาม</div>
-        <button class="sample" type="button">MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ</button>
-        <button class="sample" type="button">นโยบายการรับประกัน IP68 ครอบคลุมน้ำเข้าไหม</button>
-        <button class="sample" type="button">ในตาราง FACT_SHIPPING รายการขนส่งทั้งหมดของ FahMai ถูกจัดการโดย vendor รายใดบ้าง และส่วนแบ่งเป็นกี่เปอร์เซ็นต์</button>
-        <button class="sample" type="button">ใครเป็น CEO ของ FahMai ณ วันที่ 1 มิถุนายน 2568</button>
-        <button class="sample" type="button">ในปี 2025 ลูกค้า B2B รายไหนจ่ายเงินช้าที่สุด และ late days เป็นเท่าไหร่</button>
-        <button class="sample" type="button">สรุปหลักฐานที่เกี่ยวข้องกับ duplicate vendor payment ของ PayWise</button>
-      </div>
-
-      <div class="sidebar-actions">
-        <div class="control">
-          <label for="endpoint">Endpoint</label>
-          <select id="endpoint">
-            <option value="api/v2/chat">/api/v2/chat</option>
-            <option value="agent/local">/agent/local</option>
-            <option value="agent/thaillm">/agent/thaillm</option>
-          </select>
-        </div>
-        <button class="ghost" id="newChatBtn" type="button">New chat</button>
-        <button class="ghost" id="healthBtn" type="button">Refresh status</button>
+      <div class="rail-bottom">
+        <button class="icon-btn" type="button" title="FahMai">F</button>
       </div>
     </aside>
 
     <main class="main">
       <header class="topbar">
-        <div class="top-title">
-          <h2>FahMai Enterprise Data Agent</h2>
-          <p>PostgreSQL + Qdrant + Local Qwen</p>
+        <div class="brand-text">
+          <span class="spark"></span>
+          <span>FahMai Agent Chat</span>
         </div>
-        <div class="health-pills" id="healthPills">
+        <div class="health" id="healthPills">
           <span class="pill"><span class="dot"></span><span>checking</span></span>
         </div>
       </header>
 
-      <section class="chat" id="chat">
-        <div class="chat-inner" id="messages">
-          <div class="welcome" id="welcome">
-            <h2>ถามคำถามจากข้อมูล FahMai</h2>
-            <p>ระบบจะตอบเป็นภาษาไทย พร้อม UUID, token, sources และ audit ซ่อนไว้ในรายละเอียดของคำตอบ</p>
-            <div class="welcome-grid">
-              <button class="welcome-card" type="button">MSRP ของสินค้ารหัส NT-LT-001 เป็นเท่าไหร่ครับ</button>
-              <button class="welcome-card" type="button">นโยบายการรับประกัน IP68 ครอบคลุมน้ำเข้าไหม</button>
-              <button class="welcome-card" type="button">ใครเป็น CEO ของ FahMai ณ วันที่ 1 มิถุนายน 2568</button>
-              <button class="welcome-card" type="button">รายการขนส่งทั้งหมดถูกจัดการโดย vendor รายใดบ้าง</button>
+      <section class="stage" id="stage">
+        <div class="center" id="welcome">
+          <div class="hero">
+            <h1>What's next, FahMai?</h1>
+            <div class="prompt-card">
+              <button class="plus" type="button" title="Sample">＋</button>
+              <textarea id="heroInput" placeholder="Ask FahMai"></textarea>
+              <button class="send" id="heroSend" type="button" title="Send">↑</button>
+            </div>
+            <div class="chips">
+              <button class="chip" type="button">MSRP ของ NT-LT-001 เป็นเท่าไหร่</button>
+              <button class="chip" type="button">นโยบาย IP68 ครอบคลุมน้ำเข้าไหม</button>
+              <button class="chip" type="button">ใครเป็น CEO วันที่ 1 มิถุนายน 2568</button>
+              <button class="chip" type="button">FACT_SHIPPING ใช้ vendor รายใดบ้าง</button>
             </div>
           </div>
         </div>
+        <div class="thread" id="thread"></div>
       </section>
 
-      <footer class="composer-wrap">
-        <div class="composer">
-          <textarea id="question" placeholder="พิมพ์คำถามแล้วกด Enter"></textarea>
-          <button class="send" id="sendBtn" type="button">Send</button>
+      <section class="composer">
+        <div class="prompt-card">
+          <button class="plus" type="button" title="Sample">＋</button>
+          <textarea id="chatInput" placeholder="Ask FahMai"></textarea>
+          <button class="send" id="chatSend" type="button" title="Send">↑</button>
         </div>
-        <div class="composer-foot">
-          <span>Enter เพื่อส่ง · Shift+Enter ขึ้นบรรทัดใหม่</span>
-          <span id="lastRequest">ready</span>
-        </div>
-      </footer>
+      </section>
     </main>
   </div>
 
@@ -722,21 +605,21 @@
 
   <script>
     const els = {
-      endpoint: document.getElementById("endpoint"),
-      question: document.getElementById("question"),
-      sendBtn: document.getElementById("sendBtn"),
+      body: document.body,
+      stage: document.getElementById("stage"),
+      welcome: document.getElementById("welcome"),
+      thread: document.getElementById("thread"),
+      heroInput: document.getElementById("heroInput"),
+      chatInput: document.getElementById("chatInput"),
+      heroSend: document.getElementById("heroSend"),
+      chatSend: document.getElementById("chatSend"),
       newChatBtn: document.getElementById("newChatBtn"),
       healthBtn: document.getElementById("healthBtn"),
-      sideStatus: document.getElementById("sideStatus"),
       healthPills: document.getElementById("healthPills"),
-      messages: document.getElementById("messages"),
-      welcome: document.getElementById("welcome"),
-      chat: document.getElementById("chat"),
-      lastRequest: document.getElementById("lastRequest"),
       toast: document.getElementById("toast")
     };
 
-    const sampleButtons = document.querySelectorAll(".sample, .welcome-card");
+    const API_ENDPOINT = "api/v2/chat";
     let busy = false;
 
     function escapeHtml(value) {
@@ -748,6 +631,12 @@
         .replaceAll("'", "&#039;");
     }
 
+    function compact(value) {
+      if (value === null || value === undefined || value === "") return "-";
+      if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(3);
+      return String(value);
+    }
+
     function apiUrl(path) {
       const clean = String(path || "").replace(/^\/+/, "");
       const base = window.location.pathname.endsWith("/")
@@ -756,49 +645,39 @@
       return `${base}${clean}`;
     }
 
-    function compact(value) {
-      if (value === null || value === undefined || value === "") return "-";
-      if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(3);
-      return String(value);
-    }
-
     function showToast(message) {
       els.toast.textContent = message;
       els.toast.classList.add("show");
-      setTimeout(() => els.toast.classList.remove("show"), 2400);
+      setTimeout(() => els.toast.classList.remove("show"), 2300);
+    }
+
+    function setBusy(next) {
+      busy = next;
+      els.heroSend.disabled = next;
+      els.chatSend.disabled = next;
+      els.heroSend.textContent = next ? "…" : "↑";
+      els.chatSend.textContent = next ? "…" : "↑";
     }
 
     function scrollBottom() {
       requestAnimationFrame(() => {
-        els.chat.scrollTop = els.chat.scrollHeight;
+        els.stage.scrollTop = els.stage.scrollHeight;
       });
     }
 
     function setHealth(data, error) {
       if (error) {
-        els.healthPills.innerHTML = `<span class="pill"><span class="dot bad"></span><span>offline</span></span>`;
-        els.sideStatus.innerHTML = `
-          <div class="status-row"><span>API</span><strong>offline</strong></div>
-          <div class="status-row"><span>SQL</span><strong>-</strong></div>
-          <div class="status-row"><span>Vector</span><strong>-</strong></div>
-        `;
+        els.healthPills.innerHTML = `<span class="pill"><span class="dot bad"></span><span>api offline</span></span>`;
         return;
       }
 
       const ok = Boolean(data?.ok);
       const sql = data?.sql_backend ?? "-";
       const qdrant = data?.qdrant_enabled ? "on" : "off";
-      const debug = data?.api_v2_debug_response ? "debug" : "simple";
       els.healthPills.innerHTML = `
         <span class="pill"><span class="dot ${ok ? "ok" : "bad"}"></span><span>${ok ? "ready" : "loading"}</span></span>
         <span class="pill"><span class="dot ${sql === "postgres" ? "ok" : ""}"></span><span>sql: ${escapeHtml(sql)}</span></span>
         <span class="pill"><span class="dot ${data?.qdrant_enabled ? "ok" : ""}"></span><span>qdrant: ${qdrant}</span></span>
-        <span class="pill"><span class="dot ${data?.api_v2_debug_response ? "ok" : ""}"></span><span>${debug}</span></span>
-      `;
-      els.sideStatus.innerHTML = `
-        <div class="status-row"><span>API</span><strong>${ok ? "ready" : "loading"}</strong></div>
-        <div class="status-row"><span>SQL</span><strong>${escapeHtml(sql)}</strong></div>
-        <div class="status-row"><span>Vector</span><strong>${qdrant}</strong></div>
       `;
     }
 
@@ -812,34 +691,25 @@
       }
     }
 
-    function payloadFor(endpoint, question) {
-      if (endpoint.replace(/^\/+/, "").startsWith("api/")) {
-        return { data: { question } };
-      }
-      return { question };
-    }
-
     function answerFrom(data) {
       return data?.answer ?? data?.data?.answer ?? "";
-    }
-
-    function tokenUsageFrom(data) {
-      return data?.token_usage ?? {};
     }
 
     function sourcesFrom(data) {
       return Array.isArray(data?.sources) ? data.sources : [];
     }
 
+    function tokenUsageFrom(data) {
+      return data?.token_usage ?? {};
+    }
+
     function toolSummaryFrom(data) {
       return data?.tool_summary ?? {};
     }
 
-    function sourceHtml(sources) {
-      if (!sources.length) {
-        return `<div class="debug-item">ไม่มี source ใน response นี้</div>`;
-      }
-      return sources.slice(0, 12).map((src, index) => {
+    function sourceHtml(items) {
+      if (!items.length) return `<div class="debug-item">No sources returned.</div>`;
+      return items.slice(0, 10).map((src, index) => {
         const title = src.type || src.source || `source ${index + 1}`;
         const tag = src.backend || src.doc_type || src.query_hash || "";
         const preview = src.preview || src.text || JSON.stringify(src, null, 2);
@@ -857,141 +727,113 @@
         )).join("");
       }
       if (Array.isArray(audit) && audit.length) {
-        return audit.slice(0, 12).map((rec) => (
+        return audit.slice(0, 10).map((rec) => (
           `<div class="debug-item"><b>${escapeHtml(rec.tool || "tool")}</b> ${escapeHtml(rec.action || "")}\n` +
           `ok=${escapeHtml(rec.ok)} · sec=${escapeHtml(compact(rec.seconds))} · tokens≈${escapeHtml(compact(rec.total_tokens_estimate))}</div>`
         )).join("");
       }
-      return `<div class="debug-item">ยังไม่มี audit record</div>`;
+      return `<div class="debug-item">No tool audit returned.</div>`;
     }
 
-    function addMessage(role, content, data) {
-      if (els.welcome) {
-        els.welcome.remove();
-        els.welcome = null;
-      }
-
-      const row = document.createElement("article");
-      row.className = `message ${role}`;
-      const avatar = role === "user" ? "U" : "AI";
-
-      if (role === "user") {
-        row.innerHTML = `
-          <div class="bubble">${escapeHtml(content)}</div>
-          <div class="avatar">${avatar}</div>
-        `;
-      } else {
-        const usage = tokenUsageFrom(data || {});
-        const summary = toolSummaryFrom(data || {});
-        const sources = sourcesFrom(data || {});
-        const requestSeconds = data?.request_seconds;
-        const outputTokens = data?.total_output_token ?? usage.total_output_token;
-        const totalTokens = usage.total_tokens ?? 0;
-        const toolCalls = summary.total_tool_calls ?? data?.tool_audit?.length ?? 0;
-        row.innerHTML = `
-          <div class="avatar">${avatar}</div>
-          <div class="bubble">
-            ${escapeHtml(content)}
-            <div class="meta">
-              <span>id: ${escapeHtml(data?.id ?? "-")}</span>
-              <span>${escapeHtml(compact(requestSeconds))} sec</span>
-              <span>${escapeHtml(compact(outputTokens))} output tokens</span>
-              <span>${escapeHtml(compact(totalTokens))} llm tokens</span>
-              <span>${escapeHtml(compact(toolCalls))} tools</span>
-              <span>${escapeHtml(sources.length)} sources</span>
-            </div>
-            <details class="debug">
-              <summary>Sources and audit</summary>
-              <div class="debug-grid">
-                <div class="debug-block">
-                  <h3>Sources</h3>
-                  <div class="debug-list">${sourceHtml(sources)}</div>
-                </div>
-                <div class="debug-block">
-                  <h3>Tools</h3>
-                  <div class="debug-list">${toolHtml(summary, data?.tool_audit)}</div>
-                </div>
-                <div class="debug-block">
-                  <h3>Raw response</h3>
-                  <pre>${escapeHtml(JSON.stringify(data || {}, null, 2))}</pre>
-                </div>
-              </div>
-            </details>
-          </div>
-        `;
-      }
-
-      els.messages.appendChild(row);
+    function addUserMessage(text) {
+      const msg = document.createElement("article");
+      msg.className = "message user";
+      msg.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
+      els.thread.appendChild(msg);
       scrollBottom();
-      return row;
     }
 
     function addThinking() {
-      if (els.welcome) {
-        els.welcome.remove();
-        els.welcome = null;
-      }
-      const row = document.createElement("article");
-      row.className = "message assistant";
-      row.innerHTML = `
-        <div class="avatar">AI</div>
+      const msg = document.createElement("article");
+      msg.className = "message assistant";
+      msg.innerHTML = `
         <div class="bubble">
           <span class="thinking">
-            <span class="pulse"></span><span class="pulse"></span><span class="pulse"></span>
-            กำลังค้นหลักฐานและสร้างคำตอบ
+            <span class="dots"><i></i><i></i><i></i></span>
+            ค้นหลักฐานและสร้างคำตอบ
           </span>
         </div>
       `;
-      els.messages.appendChild(row);
+      els.thread.appendChild(msg);
       scrollBottom();
-      return row;
+      return msg;
     }
 
-    function newChat() {
-      els.messages.innerHTML = `
-        <div class="welcome" id="welcome">
-          <h2>ถามคำถามจากข้อมูล FahMai</h2>
-          <p>ระบบจะตอบเป็นภาษาไทย พร้อม UUID, token, sources และ audit ซ่อนไว้ในรายละเอียดของคำตอบ</p>
-          <div class="welcome-grid">
-            <button class="welcome-card" type="button">MSRP ของสินค้ารหัส NT-LT-001 เป็นเท่าไหร่ครับ</button>
-            <button class="welcome-card" type="button">นโยบายการรับประกัน IP68 ครอบคลุมน้ำเข้าไหม</button>
-            <button class="welcome-card" type="button">ใครเป็น CEO ของ FahMai ณ วันที่ 1 มิถุนายน 2568</button>
-            <button class="welcome-card" type="button">รายการขนส่งทั้งหมดถูกจัดการโดย vendor รายใดบ้าง</button>
+    function addAssistantMessage(text, data) {
+      const usage = tokenUsageFrom(data || {});
+      const summary = toolSummaryFrom(data || {});
+      const sources = sourcesFrom(data || {});
+      const toolCalls = summary.total_tool_calls ?? data?.tool_audit?.length ?? 0;
+      const totalTokens = usage.total_tokens ?? 0;
+      const outputTokens = data?.total_output_token ?? usage.total_output_token ?? 0;
+
+      const msg = document.createElement("article");
+      msg.className = "message assistant";
+      msg.innerHTML = `
+        <div class="bubble">
+          ${escapeHtml(text)}
+          <div class="meta">
+            <span>${escapeHtml(compact(data?.request_seconds))} sec</span>
+            <span>${escapeHtml(compact(outputTokens))} output tokens</span>
+            <span>${escapeHtml(compact(totalTokens))} llm tokens</span>
+            <span>${escapeHtml(compact(toolCalls))} tools</span>
+            <span>${escapeHtml(sources.length)} sources</span>
+            <span>id: ${escapeHtml(data?.id ?? "-")}</span>
           </div>
+          <details class="debug">
+            <summary>Sources and audit</summary>
+            <div class="debug-wrap">
+              <div class="debug-title">Sources</div>
+              ${sourceHtml(sources)}
+              <div class="debug-title">Tools</div>
+              ${toolHtml(summary, data?.tool_audit)}
+              <div class="debug-title">Raw response</div>
+              <pre>${escapeHtml(JSON.stringify(data || {}, null, 2))}</pre>
+            </div>
+          </details>
         </div>
       `;
-      els.welcome = document.getElementById("welcome");
-      document.querySelectorAll(".welcome-card").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          els.question.value = btn.textContent.trim();
-          els.question.focus();
-        });
-      });
-      els.lastRequest.textContent = "ready";
+      els.thread.appendChild(msg);
+      scrollBottom();
     }
 
-    async function ask() {
-      const question = els.question.value.trim();
-      const endpoint = els.endpoint.value;
-      if (!question) {
+    function enterChatMode() {
+      if (!els.body.classList.contains("has-chat")) {
+        els.body.classList.add("has-chat");
+        els.welcome.hidden = true;
+      }
+    }
+
+    function clearChat() {
+      els.thread.innerHTML = "";
+      els.body.classList.remove("has-chat");
+      els.welcome.hidden = false;
+      els.heroInput.value = "";
+      els.chatInput.value = "";
+      els.heroInput.focus();
+    }
+
+    async function ask(question) {
+      const text = String(question || "").trim();
+      if (!text) {
         showToast("ใส่คำถามก่อน");
         return;
       }
       if (busy) return;
 
-      busy = true;
-      els.sendBtn.disabled = true;
-      els.sendBtn.textContent = "Wait";
-      els.question.value = "";
-      addMessage("user", question);
+      enterChatMode();
+      setBusy(true);
+      els.heroInput.value = "";
+      els.chatInput.value = "";
+      addUserMessage(text);
       const thinking = addThinking();
       const started = performance.now();
 
       try {
-        const res = await fetch(apiUrl(endpoint), {
+        const res = await fetch(apiUrl(API_ENDPOINT), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payloadFor(endpoint, question))
+          body: JSON.stringify({ data: { question: text } })
         });
         const raw = await res.text();
         let data;
@@ -1000,46 +842,62 @@
         } catch {
           data = { answer: raw, status: res.status };
         }
-        if (!res.ok) {
-          throw new Error(data.detail || raw || `HTTP ${res.status}`);
-        }
+        if (!res.ok) throw new Error(data.detail || raw || `HTTP ${res.status}`);
+        if (!data.request_seconds) data.request_seconds = Number(((performance.now() - started) / 1000).toFixed(3));
         thinking.remove();
-        const elapsed = (performance.now() - started) / 1000;
-        if (!data.request_seconds) data.request_seconds = Number(elapsed.toFixed(3));
-        addMessage("assistant", answerFrom(data) || "No answer field returned.", data);
-        els.lastRequest.textContent = `${compact(data.request_seconds)} sec · ${compact(data.total_output_token ?? data?.token_usage?.total_output_token)} output tokens`;
+        addAssistantMessage(answerFrom(data) || "No answer returned.", data);
         refreshHealth();
       } catch (err) {
         thinking.remove();
-        addMessage("assistant", `Error: ${err.message || err}`, { request_seconds: (performance.now() - started) / 1000 });
+        addAssistantMessage(`Error: ${err.message || err}`, {
+          request_seconds: Number(((performance.now() - started) / 1000).toFixed(3)),
+          tool_summary: { total_tool_calls: 0 }
+        });
         showToast("request failed");
       } finally {
-        busy = false;
-        els.sendBtn.disabled = false;
-        els.sendBtn.textContent = "Send";
-        els.question.focus();
+        setBusy(false);
+        els.chatInput.focus();
       }
     }
 
-    sampleButtons.forEach((btn) => {
+    function bindInput(input, button) {
+      button.addEventListener("click", () => ask(input.value));
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          ask(input.value);
+        }
+      });
+    }
+
+    document.querySelectorAll(".chip").forEach((btn) => {
       btn.addEventListener("click", () => {
-        els.question.value = btn.textContent.trim();
-        els.question.focus();
+        els.heroInput.value = btn.textContent.trim();
+        els.heroInput.focus();
       });
     });
 
-    els.sendBtn.addEventListener("click", ask);
-    els.newChatBtn.addEventListener("click", newChat);
-    els.healthBtn.addEventListener("click", refreshHealth);
-    els.question.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        ask();
-      }
+    document.querySelectorAll(".plus").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const samples = [
+          "MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ",
+          "นโยบายการรับประกัน IP68 ครอบคลุมน้ำเข้าไหม",
+          "ใครเป็น CEO ของ FahMai ณ วันที่ 1 มิถุนายน 2568",
+          "ในปี 2025 ลูกค้า B2B รายไหนจ่ายเงินช้าที่สุด และ late days เป็นเท่าไหร่"
+        ];
+        const pick = samples[Math.floor(Math.random() * samples.length)];
+        const input = els.body.classList.contains("has-chat") ? els.chatInput : els.heroInput;
+        input.value = pick;
+        input.focus();
+      });
     });
 
+    els.newChatBtn.addEventListener("click", clearChat);
+    els.healthBtn.addEventListener("click", refreshHealth);
+    bindInput(els.heroInput, els.heroSend);
+    bindInput(els.chatInput, els.chatSend);
     refreshHealth();
-    els.question.focus();
+    els.heroInput.focus();
   </script>
 </body>
 </html>
