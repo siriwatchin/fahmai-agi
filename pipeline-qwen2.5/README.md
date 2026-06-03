@@ -59,6 +59,20 @@ Outputs:
 - `outputs/qwen25_token_usage.csv`
 - `outputs/qwen25_token_summary.json`
 
+The integrated B200 runner also writes every run to a timestamped folder:
+
+```text
+$WORK_ROOT/output/<RUN_ID>/
+  best_results.csv
+  best_submission.csv
+  best_debug.json
+  best_token_usage.csv
+  best_token_summary.json
+```
+
+It still updates latest convenience copies at `$WORK_ROOT/best_*.csv/json`.
+Set `RUN_ID`, `OUTPUT_ROOT`, or `RUN_OUTPUT_DIR` to customize the run folder.
+
 ## Notes
 
 - The pipeline prefers deterministic SQL when the question has clear table/field intent.

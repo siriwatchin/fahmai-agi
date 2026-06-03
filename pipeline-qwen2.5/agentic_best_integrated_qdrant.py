@@ -44,6 +44,9 @@ GEN_TEMPERATURE = float(os.getenv("GEN_TEMPERATURE", "0.7"))
 GEN_TOP_P = float(os.getenv("GEN_TOP_P", "0.8"))
 GEN_TOP_K = int(os.getenv("GEN_TOP_K", "20"))
 GEN_REPETITION_PENALTY = float(os.getenv("GEN_REPETITION_PENALTY", "1.05"))
+RUN_ID = os.getenv("RUN_ID", time.strftime("%Y%m%d_%H%M%S"))
+OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", str(WORK / "output"))).expanduser()
+RUN_OUTPUT_DIR = Path(os.getenv("RUN_OUTPUT_DIR", str(OUTPUT_ROOT / RUN_ID))).expanduser()
 
 SYSTEM_PROMPT = """
 You are FahMai Enterprise Data Agent.
@@ -1287,16 +1290,24 @@ OBSERVATIONS:
     }
 
 
-def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0):
-    result_df = pd.DataFrame(rows)
-    result_df.to_csv(WORK / "best_results.csv", index=False)
+def _write_run_files(out_dir, result_df, debug, token_df, summary):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result_df.to_csv(out_dir / "best_results.csv", index=False)
     if len(result_df):
-        result_df[["id", "answer"]].rename(columns={"answer": "response"}).to_csv(WORK / "best_submission.csv", index=False)
-    (WORK / "best_debug.json").write_text(json.dumps(debug, ensure_ascii=False, indent=2, default=str))
+        result_df[["id", "answer"]].rename(columns={"answer": "response"}).to_csv(out_dir / "best_submission.csv", index=False)
+    else:
+        pd.DataFrame(columns=["id", "response"]).to_csv(out_dir / "best_submission.csv", index=False)
+    (out_dir / "best_debug.json").write_text(json.dumps(debug, ensure_ascii=False, indent=2, default=str))
+    token_df.to_csv(out_dir / "best_token_usage.csv", index=False)
+    (out_dir / "best_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
 
+
+def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUTPUT_DIR):
+    result_df = pd.DataFrame(rows)
     token_df = pd.DataFrame(TOKEN_LOG)
-    token_df.to_csv(WORK / "best_token_usage.csv", index=False)
     summary = {
+        "run_id": RUN_ID,
+        "run_output_dir": str(out_dir),
         "num_llm_calls": int(len(token_df)),
         "prompt_tokens": int(token_df["prompt_tokens"].sum()) if len(token_df) else 0,
         "completion_tokens": int(token_df["completion_tokens"].sum()) if len(token_df) else 0,
@@ -1309,8 +1320,19 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0):
         "qdrant_enabled": bool(qdrant_retriever and qdrant_retriever.ok),
         "qdrant_collection": getattr(qdrant_retriever, "collection", None),
         "completed_rows": int(len(result_df)),
+        "model_path": str(MODEL),
+        "doc_top_k": DOC_TOP_K,
+        "qdrant_top_k": QDRANT_TOP_K,
+        "schema_top_k": SCHEMA_TOP_K,
+        "gen_max_input_tokens": GEN_MAX_INPUT_TOKENS,
+        "gen_do_sample": GEN_DO_SAMPLE,
+        "gen_temperature": GEN_TEMPERATURE if GEN_DO_SAMPLE else None,
+        "gen_top_p": GEN_TOP_P if GEN_DO_SAMPLE else None,
+        "gen_top_k": GEN_TOP_K if GEN_DO_SAMPLE else None,
+        "gen_repetition_penalty": GEN_REPETITION_PENALTY,
     }
-    (WORK / "best_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
+    _write_run_files(out_dir, result_df, debug, token_df, summary)
+    _write_run_files(WORK, result_df, debug, token_df, summary)
     return summary
 
 
@@ -1322,6 +1344,9 @@ def main():
     args = ap.parse_args()
 
     run_t0 = time.time()
+    RUN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    print("run_id:", RUN_ID)
+    print("run_output_dir:", RUN_OUTPUT_DIR)
 
     print("loading sql...")
     t0 = time.time()
@@ -1377,15 +1402,18 @@ def main():
         print("question_sec:", qsec)
         rows.append({"id": qid, "question": q, "answer": ans, "seconds": qsec})
         debug[qid] = obs
-        save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0)
+        save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, RUN_OUTPUT_DIR)
 
-    summary = save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0)
+    summary = save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, RUN_OUTPUT_DIR)
 
     print("\nDONE")
-    print("results:", WORK / "best_results.csv")
-    print("submission:", WORK / "best_submission.csv")
-    print("debug:", WORK / "best_debug.json")
-    print("token_summary:", WORK / "best_token_summary.json")
+    print("run_output_dir:", RUN_OUTPUT_DIR)
+    print("results:", RUN_OUTPUT_DIR / "best_results.csv")
+    print("submission:", RUN_OUTPUT_DIR / "best_submission.csv")
+    print("debug:", RUN_OUTPUT_DIR / "best_debug.json")
+    print("token_summary:", RUN_OUTPUT_DIR / "best_token_summary.json")
+    print("latest_results:", WORK / "best_results.csv")
+    print("latest_submission:", WORK / "best_submission.csv")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
