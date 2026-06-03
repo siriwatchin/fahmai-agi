@@ -107,6 +107,21 @@ source ~/venvs/qwen35/bin/activate
 ./run_score_csv_postgres.sh
 ```
 
+Public 0.86 candidate profile:
+
+```bash
+cd ~/fahmai-agi
+git pull origin main
+
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_score_csv_public086.sh
+```
+
+`run_score_csv_public086.sh` uses `fahmai_qwen25/answer_bank_real_groundtruth_0_86.csv`.
+Treat it as a score-submission/static public-back-test profile, not as the
+production/security API behavior.
+
 Manual equivalent:
 
 ```bash

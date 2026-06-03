@@ -30,6 +30,21 @@ Important env:
 - `QUESTIONS_CSV_PATH`
 - `WORK_ROOT`
 
+### `run_score_csv_public086.sh`
+
+Purpose:
+- Generate the known public 0.86 candidate CSV from `answer_bank_real_groundtruth_0_86.csv`.
+- Keeps this score-only profile separate from production/security behavior.
+- Skips SQL/retrieval/Qdrant/model loading in fast-only mode.
+
+Use when:
+- You need to reproduce the strongest known public-score static candidate.
+- You are preparing a Kaggle public back-test submission.
+
+Do not use when:
+- You are demonstrating prompt-injection-safe production behavior.
+- You need unseen-question generalization.
+
 ### `run_model_csv.sh`
 
 Purpose:
