@@ -335,6 +335,9 @@ def save_outputs(records: list[dict[str, Any]], debug: dict[str, Any], sqltool: 
 
     token_df = pd.DataFrame(base.TOKEN_LOG)
     token_df.to_csv(RUN_OUTPUT_DIR / "sourced_secure_token_usage.csv", index=False)
+    with (RUN_OUTPUT_DIR / "sourced_secure_llm_audit.jsonl").open("w", encoding="utf-8") as f:
+        for rec in getattr(base, "LLM_AUDIT_LOG", []):
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
     summary = {
         "run_id": RUN_ID,
         "run_output_dir": str(RUN_OUTPUT_DIR),
@@ -344,6 +347,7 @@ def save_outputs(records: list[dict[str, Any]], debug: dict[str, Any], sqltool: 
         "completion_tokens": int(token_df["completion_tokens"].sum()) if len(token_df) else 0,
         "total_tokens": int(token_df["total_tokens"].sum()) if len(token_df) else 0,
         "llm_seconds": float(token_df["seconds"].sum()) if len(token_df) else 0,
+        "llm_audit_rows": len(getattr(base, "LLM_AUDIT_LOG", [])),
         "total_pipeline_sec": round(time.time() - run_t0, 3),
         "sql_backend": getattr(sqltool, "backend", None),
         "sql_error": getattr(sqltool, "error", None),

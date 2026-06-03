@@ -68,6 +68,7 @@ $WORK_ROOT/output/<RUN_ID>/
   best_debug.json
   best_token_usage.csv
   best_token_summary.json
+  best_llm_audit.jsonl
 ```
 
 Set `RUN_ID`, `OUTPUT_ROOT`, or `RUN_OUTPUT_DIR` to customize the run folder.
@@ -120,6 +121,7 @@ $WORK_ROOT/output/<RUN_ID>_sourced_secure/
   sourced_secure_debug.json
   sourced_secure_token_usage.csv
   sourced_secure_summary.json
+  sourced_secure_llm_audit.jsonl
 ```
 
 `sourced_secure_results.csv` is for quick review. `sourced_secure_records.jsonl`
@@ -191,6 +193,15 @@ curl -s -X POST http://127.0.0.1:8888/api/v2/chat \
 For load tests, pre-run the 100-question batch once, then keep `ENABLE_API_CACHE=1`.
 The API preloads the newest `$WORK_ROOT/output/<RUN_ID>/best_results.csv` so repeated
 questions return from memory instead of hitting Qwen/GPU.
+
+API audit outputs are written under `API_OUTPUT_DIR`:
+
+```text
+api_requests.jsonl
+api_token_usage.csv
+api_token_summary.json
+api_llm_audit.jsonl
+```
 
 API contract:
 

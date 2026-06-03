@@ -27,6 +27,7 @@ QUESTIONS_CSV = Path(os.getenv("QUESTIONS_CSV_PATH", str(SRC / "questions.csv"))
 QUESTIONS_XLSX = Path(os.getenv("QUESTIONS_XLSX_PATH", str(SRC / "question.xlsx"))).expanduser()
 MODEL = Path(os.getenv("MODEL_PATH", str(SRC / "qwen35/models/Qwen2.5-7B-Instruct"))).expanduser()
 TOKEN_LOG = []
+LLM_AUDIT_LOG = []
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "fahmai_rag_bge")
@@ -47,6 +48,7 @@ GEN_REPETITION_PENALTY = float(os.getenv("GEN_REPETITION_PENALTY", "1.05"))
 RUN_ID = os.getenv("RUN_ID", time.strftime("%Y%m%d_%H%M%S"))
 OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", str(WORK / "output"))).expanduser()
 RUN_OUTPUT_DIR = Path(os.getenv("RUN_OUTPUT_DIR", str(OUTPUT_ROOT / RUN_ID))).expanduser()
+LLM_AUDIT_INCLUDE_PROMPT = os.getenv("LLM_AUDIT_INCLUDE_PROMPT", "0").lower() in {"1", "true", "yes"}
 
 SYSTEM_PROMPT = """
 You are FahMai Enterprise Data Agent.
@@ -129,6 +131,19 @@ def sanitize_answer(s):
     s = re.sub(r"(?i)^assistant\s*", "", s).strip()
     s = re.sub(r"(?s)<think>.*?</think>", "", s).strip()
     return s[:600]
+
+
+def _sha1_short(text, n=12):
+    return __import__("hashlib").sha1(str(text).encode("utf-8", errors="ignore")).hexdigest()[:n]
+
+
+def _redact_for_audit(text, limit=500):
+    text = str(text or "")
+    text = re.sub(r"(?s)<think>.*?</think>", "<think:redacted>", text)
+    text = re.sub(r"(?i)(hf_[A-Za-z0-9_=-]+)", "hf_<redacted>", text)
+    text = re.sub(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?[^\\s,'\"]+", r"\1=<redacted>", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
 
 
 class SQLTool:
@@ -500,6 +515,7 @@ def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
     sec = time.time() - t0
     completion = int(y.shape[-1]) - input_len
     ans = tok.decode(y[0][input_len:], skip_special_tokens=True).strip()
+    clean = sanitize_answer(ans)
     TOKEN_LOG.append(
         {
             "qid": qid,
@@ -517,7 +533,33 @@ def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
             "repetition_penalty": GEN_REPETITION_PENALTY,
         }
     )
-    return sanitize_answer(ans)
+    audit_rec = {
+        "ts": pd.Timestamp.now(tz="Asia/Bangkok").isoformat(),
+        "qid": qid,
+        "stage": stage,
+        "model_path": str(MODEL),
+        "prompt_hash": _sha1_short(prompt),
+        "raw_answer_hash": _sha1_short(ans),
+        "sanitized_answer_hash": _sha1_short(clean),
+        "prompt_tokens": input_len,
+        "completion_tokens": completion,
+        "total_tokens": input_len + completion,
+        "seconds": round(sec, 3),
+        "max_new_tokens": max_new_tokens,
+        "do_sample": GEN_DO_SAMPLE,
+        "temperature": GEN_TEMPERATURE if GEN_DO_SAMPLE else None,
+        "top_p": GEN_TOP_P if GEN_DO_SAMPLE else None,
+        "top_k": GEN_TOP_K if GEN_DO_SAMPLE else None,
+        "repetition_penalty": GEN_REPETITION_PENALTY,
+        "prompt_preview": _redact_for_audit(prompt),
+        "raw_answer_preview": _redact_for_audit(ans),
+        "sanitized_answer_preview": _redact_for_audit(clean),
+    }
+    if LLM_AUDIT_INCLUDE_PROMPT:
+        audit_rec["prompt"] = prompt
+        audit_rec["raw_answer"] = ans
+    LLM_AUDIT_LOG.append(audit_rec)
+    return clean
 
 
 def run_rule(sqltool, sql, formatter, docs, schemas):
@@ -1306,6 +1348,9 @@ def _write_run_files(out_dir, result_df, debug, token_df, summary):
         pd.DataFrame(columns=["id", "response"]).to_csv(out_dir / "best_submission.csv", index=False)
     (out_dir / "best_debug.json").write_text(json.dumps(debug, ensure_ascii=False, indent=2, default=str))
     token_df.to_csv(out_dir / "best_token_usage.csv", index=False)
+    with (out_dir / "best_llm_audit.jsonl").open("w", encoding="utf-8") as f:
+        for rec in LLM_AUDIT_LOG:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
     (out_dir / "best_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
 
 
@@ -1337,6 +1382,8 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUT
         "gen_top_p": GEN_TOP_P if GEN_DO_SAMPLE else None,
         "gen_top_k": GEN_TOP_K if GEN_DO_SAMPLE else None,
         "gen_repetition_penalty": GEN_REPETITION_PENALTY,
+        "llm_audit_rows": len(LLM_AUDIT_LOG),
+        "llm_audit_include_prompt": LLM_AUDIT_INCLUDE_PROMPT,
     }
     _write_run_files(out_dir, result_df, debug, token_df, summary)
     return summary

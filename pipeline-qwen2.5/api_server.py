@@ -169,6 +169,9 @@ def _save_api_debug(qid: str, question: str, answer: str, obs: dict[str, Any], s
     }
     with (API_OUTPUT_DIR / "api_requests.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    with (API_OUTPUT_DIR / "api_llm_audit.jsonl").open("w", encoding="utf-8") as f:
+        for llm_rec in getattr(pipeline, "LLM_AUDIT_LOG", []):
+            f.write(json.dumps(llm_rec, ensure_ascii=False, default=str) + "\n")
 
     token_df = pd.DataFrame(pipeline.TOKEN_LOG)
     token_df.to_csv(API_OUTPUT_DIR / "api_token_usage.csv", index=False)
