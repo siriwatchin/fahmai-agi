@@ -61,7 +61,16 @@ def _guardrail_enabled() -> bool:
 
 
 def _guardrail_predict(text: str) -> dict[str, Any]:
+    t0 = time.time()
     if not _guardrail_enabled():
+        pipeline.log_tool_call(
+            "guardrail_predict",
+            action="disabled",
+            input_obj={"text": text},
+            output_obj={"enabled": False},
+            ok=True,
+            seconds=time.time() - t0,
+        )
         return {"enabled": False}
 
     payload: dict[str, Any] = {
@@ -83,15 +92,34 @@ def _guardrail_predict(text: str) -> dict[str, Any]:
             data = json.loads(resp.read().decode("utf-8"))
         data["enabled"] = True
         data["action"] = GUARDRAIL_ACTION
+        pipeline.log_tool_call(
+            "guardrail_predict",
+            action=GUARDRAIL_ACTION,
+            input_obj=payload,
+            output_obj=data,
+            ok=not bool(data.get("is_attack") and GUARDRAIL_ACTION in {"reject", "block"}),
+            seconds=time.time() - t0,
+            meta={"url": GUARDRAIL_URL, "threshold": payload.get("threshold")},
+        )
         return data
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
-        return {
+        data = {
             "enabled": True,
             "error": str(exc),
             "is_attack": bool(GUARDRAIL_FAIL_CLOSED),
             "action": GUARDRAIL_ACTION,
             "fail_closed": GUARDRAIL_FAIL_CLOSED,
         }
+        pipeline.log_tool_call(
+            "guardrail_predict",
+            action="error",
+            input_obj=payload,
+            output_obj=data,
+            ok=not GUARDRAIL_FAIL_CLOSED,
+            seconds=time.time() - t0,
+            meta={"url": GUARDRAIL_URL, "error": str(exc)},
+        )
+        return data
 
 
 class ChatPayload(BaseModel):
@@ -270,9 +298,13 @@ def _save_api_debug(
     with (API_OUTPUT_DIR / "api_llm_audit.jsonl").open("w", encoding="utf-8") as f:
         for llm_rec in getattr(pipeline, "LLM_AUDIT_LOG", []):
             f.write(json.dumps(llm_rec, ensure_ascii=False, default=str) + "\n")
+    with (API_OUTPUT_DIR / "api_tool_audit.jsonl").open("w", encoding="utf-8") as f:
+        for tool_rec in getattr(pipeline, "TOOL_AUDIT_LOG", []):
+            f.write(json.dumps(tool_rec, ensure_ascii=False, default=str) + "\n")
 
     token_df = pd.DataFrame(pipeline.TOKEN_LOG)
     token_df.to_csv(API_OUTPUT_DIR / "api_token_usage.csv", index=False)
+    tool_summary = pipeline.tool_audit_summary()
     summary = {
         "num_llm_calls": int(len(token_df)),
         "prompt_tokens": int(token_df["prompt_tokens"].sum()) if len(token_df) else 0,
@@ -286,8 +318,11 @@ def _save_api_debug(
         "guardrail_enabled": _guardrail_enabled(),
         "guardrail_url": GUARDRAIL_URL or None,
         "guardrail_action": GUARDRAIL_ACTION,
+        "tool_audit_rows": int(len(getattr(pipeline, "TOOL_AUDIT_LOG", []))),
+        "tool_summary": tool_summary,
     }
     (API_OUTPUT_DIR / "api_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+    (API_OUTPUT_DIR / "api_tool_summary.json").write_text(json.dumps(tool_summary, ensure_ascii=False, indent=2, default=str))
 
 
 def _load_runtime() -> RuntimeState:
@@ -404,6 +439,8 @@ def health() -> dict[str, Any]:
         "guardrail_url": GUARDRAIL_URL or None,
         "guardrail_action": GUARDRAIL_ACTION,
         "guardrail_fail_closed": GUARDRAIL_FAIL_CLOSED,
+        "llm_audit_rows": len(getattr(pipeline, "LLM_AUDIT_LOG", [])),
+        "tool_audit_rows": len(getattr(pipeline, "TOOL_AUDIT_LOG", [])),
     }
 
 
@@ -428,11 +465,24 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
         raise HTTPException(status_code=400, detail="question is required")
 
     request_uuid = str(uuid.uuid4())
-    guardrail = _guardrail_predict(question)
     qid = explicit_qid or state.question_to_id.get(question) or "API-Q"
+    pipeline.set_tool_audit_context(qid=qid, request_uuid=request_uuid, route=route)
+    guardrail = _guardrail_predict(question)
     if guardrail.get("enabled") and guardrail.get("is_attack") and GUARDRAIL_ACTION in {"reject", "block"}:
         answer = "ขอปฏิเสธคำสั่งที่อาจเป็น prompt injection — จะตอบจากข้อมูลในระบบเท่านั้น"
         total_output_token = _count_output_tokens(answer)
+        pipeline.log_tool_call(
+            "api_response",
+            action="guardrail_block",
+            qid=qid,
+            request_uuid=request_uuid,
+            route=route,
+            input_obj={"question": question},
+            output_obj={"answer": answer},
+            ok=True,
+            seconds=0,
+            output_tokens=total_output_token,
+        )
         _save_api_debug(
             qid,
             question,
@@ -449,6 +499,18 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
     if _looks_like_day_question(question):
         answer = _thai_today()
         total_output_token = _count_output_tokens(answer)
+        pipeline.log_tool_call(
+            "api_smoke_answer",
+            action="today",
+            qid=qid,
+            request_uuid=request_uuid,
+            route=route,
+            input_obj={"question": question},
+            output_obj={"answer": answer},
+            ok=True,
+            seconds=0,
+            output_tokens=total_output_token,
+        )
         _save_api_debug(
             qid,
             question,
@@ -462,11 +524,25 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
         return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
 
     if ENABLE_API_CACHE:
+        cache_keys = _cache_keys(qid, question)
         for key in _cache_keys(qid, question):
             if key in state.answer_cache:
                 state.cache_hits += 1
                 answer = state.answer_cache[key]
                 total_output_token = _count_output_tokens(answer)
+                pipeline.log_tool_call(
+                    "api_answer_cache",
+                    action="hit",
+                    qid=qid,
+                    request_uuid=request_uuid,
+                    route=route,
+                    input_obj={"keys": cache_keys},
+                    output_obj={"matched_key": key, "answer": answer},
+                    ok=True,
+                    seconds=0,
+                    output_tokens=total_output_token,
+                    meta={"cache_size": len(state.answer_cache), "cache_hits": state.cache_hits},
+                )
                 _save_api_debug(
                     qid,
                     question,
@@ -479,6 +555,18 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                 )
                 return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
         state.cache_misses += 1
+        pipeline.log_tool_call(
+            "api_answer_cache",
+            action="miss",
+            qid=qid,
+            request_uuid=request_uuid,
+            route=route,
+            input_obj={"keys": cache_keys},
+            output_obj={"hit": False},
+            ok=False,
+            seconds=0,
+            meta={"cache_size": len(state.answer_cache), "cache_misses": state.cache_misses},
+        )
         if API_CACHE_MISS_FALLBACK:
             fast_answer, fast_obs = (None, {})
             if state.sqltool is not None:
@@ -486,6 +574,18 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
             if fast_answer:
                 answer = pipeline.sanitize_answer(fast_answer)
                 total_output_token = _count_output_tokens(answer)
+                pipeline.log_tool_call(
+                    "api_cache_miss_fallback",
+                    action="hard_sql_answer",
+                    qid=qid,
+                    request_uuid=request_uuid,
+                    route=route,
+                    input_obj={"question": question},
+                    output_obj={"answer": answer},
+                    ok=True,
+                    seconds=0,
+                    output_tokens=total_output_token,
+                )
                 fast_obs["guardrail"] = guardrail
                 fast_obs["cache_miss_fallback_rule"] = True
                 _save_api_debug(
@@ -502,6 +602,18 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
 
             answer = API_CACHE_MISS_FALLBACK_ANSWER
             total_output_token = _count_output_tokens(answer)
+            pipeline.log_tool_call(
+                "api_cache_miss_fallback",
+                action="scoped_refusal",
+                qid=qid,
+                request_uuid=request_uuid,
+                route=route,
+                input_obj={"question": question},
+                output_obj={"answer": answer},
+                ok=True,
+                seconds=0,
+                output_tokens=total_output_token,
+            )
             _save_api_debug(
                 qid,
                 question,
@@ -533,6 +645,18 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
         for key in _cache_keys(qid, question):
             state.answer_cache[key] = answer
     total_output_token = _count_output_tokens(answer)
+    pipeline.log_tool_call(
+        "api_response",
+        action="pipeline_answer",
+        qid=qid,
+        request_uuid=request_uuid,
+        route=route,
+        input_obj={"question": question},
+        output_obj={"answer": answer},
+        ok=True,
+        seconds=seconds,
+        output_tokens=total_output_token,
+    )
     _save_api_debug(
         qid,
         question,

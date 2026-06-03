@@ -581,6 +581,57 @@ Contains:
 Security:
 - Keep `LLM_AUDIT_INCLUDE_PROMPT=0` unless debugging in a safe environment.
 
+### `best_tool_audit.jsonl`
+
+Purpose:
+- Full tool-call history for the batch CSV pipeline.
+
+Contains:
+- `qid`
+- `request_uuid` when called through API
+- `route`
+- `tool`
+- `action`
+- `seconds`
+- estimated input/output/total tokens
+- input/output hashes
+- redacted previews
+- backend metadata
+
+Tracked tools:
+- `static_answer_bank`
+- `guardrail_predict`
+- `api_answer_cache`
+- `api_cache_miss_fallback`
+- `sql_query`
+- `schema_search`
+- `tfidf_search`
+- `qdrant_encoder`
+- `qdrant_search`
+- `hybrid_rrf`
+- `llm_generate`
+- `api_response`
+
+### `best_tool_summary.json`
+
+Purpose:
+- Aggregated tool-call counts, latency, and estimated tokens.
+
+Use when:
+- Explaining resource usage per tool.
+- Comparing fast cache mode vs full SQL/RAG/Qwen mode.
+- Load-test audit.
+
+### `api_tool_audit.jsonl` and `api_tool_summary.json`
+
+Purpose:
+- Same tool audit data as batch mode, but continuously written by FastAPI under
+  `API_OUTPUT_DIR`.
+
+Use when:
+- Back-test requires audit-trail capture.
+- You need per-request UUID linked to tool history.
+
 ### `best_rewrite_guard.jsonl`
 
 Purpose:

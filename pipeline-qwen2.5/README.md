@@ -595,7 +595,15 @@ api_requests.jsonl
 api_token_usage.csv
 api_token_summary.json
 api_llm_audit.jsonl
+api_tool_audit.jsonl
+api_tool_summary.json
 ```
+
+`api_tool_audit.jsonl` records every tool-level action with request UUID, route,
+question id, latency, estimated input/output tokens, hashes, and redacted
+previews. `api_tool_summary.json` aggregates call count, seconds, and token
+estimates per tool/action. This includes cache lookup, guardrail, SQL, TF-IDF,
+Qdrant, hybrid RRF, and LLM generation when those paths are used.
 
 Guardrail behavior:
 

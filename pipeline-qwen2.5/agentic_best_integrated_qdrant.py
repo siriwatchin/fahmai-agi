@@ -28,7 +28,9 @@ QUESTIONS_XLSX = Path(os.getenv("QUESTIONS_XLSX_PATH", str(SRC / "question.xlsx"
 MODEL = Path(os.getenv("MODEL_PATH", str(SRC / "qwen35/models/Qwen2.5-7B-Instruct"))).expanduser()
 TOKEN_LOG = []
 LLM_AUDIT_LOG = []
+TOOL_AUDIT_LOG = []
 REWRITE_GUARD_LOG = []
+TOOL_AUDIT_CONTEXT = {"qid": None, "request_uuid": None, "route": None}
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "fahmai_rag_bge")
@@ -329,15 +331,39 @@ def static_answer_bank_fingerprint():
 
 
 def static_answer_bank_answer(qid):
+    t0 = time.time()
     bank = load_static_answer_bank()
     ans = bank.get(str(qid).strip())
     if not ans:
+        log_tool_call(
+            "static_answer_bank",
+            action="lookup",
+            qid=qid,
+            input_obj={"qid": qid, "answer_bank_path": str(ANSWER_BANK_PATH)},
+            output_obj={"hit": False},
+            ok=False,
+            seconds=time.time() - t0,
+            meta={"answer_bank_version": ANSWER_BANK_VERSION, "answer_bank_sha1": static_answer_bank_fingerprint()},
+        )
         return None, None
-    return ans, {
+    obs = {
         "answer_source": "static_answer_bank",
         "answer_bank_path": str(ANSWER_BANK_PATH),
         "answer_bank_version": ANSWER_BANK_VERSION,
         "answer_bank_sha1": static_answer_bank_fingerprint(),
+    }
+    log_tool_call(
+        "static_answer_bank",
+        action="lookup",
+        qid=qid,
+        input_obj={"qid": qid, "answer_bank_path": str(ANSWER_BANK_PATH)},
+        output_obj={"hit": True, "answer": ans},
+        ok=True,
+        seconds=time.time() - t0,
+        meta={"answer_bank_version": ANSWER_BANK_VERSION, "answer_bank_sha1": obs["answer_bank_sha1"]},
+    )
+    return ans, {
+        **obs,
     }
 
 
@@ -352,6 +378,108 @@ def _redact_for_audit(text, limit=500):
     text = re.sub(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?[^\\s,'\"]+", r"\1=<redacted>", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:limit]
+
+
+def set_tool_audit_context(qid=None, request_uuid=None, route=None):
+    if qid is not None:
+        TOOL_AUDIT_CONTEXT["qid"] = qid
+    if request_uuid is not None:
+        TOOL_AUDIT_CONTEXT["request_uuid"] = request_uuid
+    if route is not None:
+        TOOL_AUDIT_CONTEXT["route"] = route
+
+
+def _audit_text(obj):
+    if obj is None:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    try:
+        return json.dumps(obj, ensure_ascii=False, default=str)
+    except Exception:
+        return str(obj)
+
+
+def _estimate_audit_tokens(obj):
+    text = _audit_text(obj)
+    if not text:
+        return 0
+    nonspace = re.sub(r"\s+", "", text)
+    wordish = len(re.findall(r"\S+", text))
+    # Rough tokenizer-independent estimate that does not undercount Thai text.
+    return int(max(wordish, (len(nonspace) + 3) // 4))
+
+
+def log_tool_call(
+    tool,
+    action=None,
+    qid=None,
+    request_uuid=None,
+    route=None,
+    input_obj=None,
+    output_obj=None,
+    ok=True,
+    seconds=None,
+    input_tokens=None,
+    output_tokens=None,
+    meta=None,
+):
+    input_text = _audit_text(input_obj)
+    output_text = _audit_text(output_obj)
+    in_tokens = _estimate_audit_tokens(input_text) if input_tokens is None else int(input_tokens)
+    out_tokens = _estimate_audit_tokens(output_text) if output_tokens is None else int(output_tokens)
+    rec = {
+        "ts": pd.Timestamp.now(tz="Asia/Bangkok").isoformat(),
+        "qid": qid if qid is not None else TOOL_AUDIT_CONTEXT.get("qid"),
+        "request_uuid": request_uuid if request_uuid is not None else TOOL_AUDIT_CONTEXT.get("request_uuid"),
+        "route": route if route is not None else TOOL_AUDIT_CONTEXT.get("route"),
+        "tool": tool,
+        "action": action,
+        "ok": bool(ok),
+        "seconds": round(float(seconds), 3) if seconds is not None else None,
+        "input_tokens_estimate": in_tokens,
+        "output_tokens_estimate": out_tokens,
+        "total_tokens_estimate": in_tokens + out_tokens,
+        "input_chars": len(input_text),
+        "output_chars": len(output_text),
+        "input_hash": _sha1_short(input_text) if input_text else None,
+        "output_hash": _sha1_short(output_text) if output_text else None,
+        "input_preview": _redact_for_audit(input_text, limit=500),
+        "output_preview": _redact_for_audit(output_text, limit=700),
+        "meta": meta or {},
+    }
+    TOOL_AUDIT_LOG.append(rec)
+    return rec
+
+
+def tool_audit_summary():
+    by_tool = {}
+    by_action = {}
+    for rec in TOOL_AUDIT_LOG:
+        tool = rec.get("tool") or "unknown"
+        action_key = f"{tool}:{rec.get('action') or 'default'}"
+        for store, key in [(by_tool, tool), (by_action, action_key)]:
+            item = store.setdefault(
+                key,
+                {
+                    "calls": 0,
+                    "ok_calls": 0,
+                    "seconds": 0.0,
+                    "input_tokens_estimate": 0,
+                    "output_tokens_estimate": 0,
+                    "total_tokens_estimate": 0,
+                },
+            )
+            item["calls"] += 1
+            item["ok_calls"] += 1 if rec.get("ok") else 0
+            item["seconds"] += float(rec.get("seconds") or 0)
+            item["input_tokens_estimate"] += int(rec.get("input_tokens_estimate") or 0)
+            item["output_tokens_estimate"] += int(rec.get("output_tokens_estimate") or 0)
+            item["total_tokens_estimate"] += int(rec.get("total_tokens_estimate") or 0)
+    for store in [by_tool, by_action]:
+        for item in store.values():
+            item["seconds"] = round(item["seconds"], 3)
+    return {"total_tool_calls": len(TOOL_AUDIT_LOG), "by_tool": by_tool, "by_action": by_action}
 
 
 class SQLTool:
@@ -475,6 +603,7 @@ class SQLTool:
         return sql
 
     def query(self, sql):
+        t0 = time.time()
         try:
             if self.backend == "postgres":
                 sql_run = self._translate_postgres_sql(sql).strip().rstrip(";")
@@ -485,18 +614,50 @@ class SQLTool:
                     rows = cur.fetchmany(200)
                     desc = cur.description or []
                 rows = [dict(r) for r in rows]
-                return {"ok": True, "shape": [len(rows), len(desc)], "rows": rows, "sql": sql_run}
+                result = {"ok": True, "shape": [len(rows), len(desc)], "rows": rows, "sql": sql_run}
+                log_tool_call(
+                    "sql_query",
+                    action=self.backend,
+                    input_obj={"sql": sql_run},
+                    output_obj={"shape": result["shape"], "rows": rows[:20]},
+                    ok=True,
+                    seconds=time.time() - t0,
+                    meta={"backend": self.backend},
+                )
+                return result
             df = self.con.execute(sql).df()
-            return {"ok": True, "shape": list(df.shape), "rows": df.head(200).to_dict("records"), "sql": sql}
+            rows = df.head(200).to_dict("records")
+            result = {"ok": True, "shape": list(df.shape), "rows": rows, "sql": sql}
+            log_tool_call(
+                "sql_query",
+                action=self.backend,
+                input_obj={"sql": sql},
+                output_obj={"shape": result["shape"], "rows": rows[:20]},
+                ok=True,
+                seconds=time.time() - t0,
+                meta={"backend": self.backend},
+            )
+            return result
         except Exception as e:
             if self.backend == "postgres" and self.con is not None:
                 try:
                     self.con.rollback()
                 except Exception:
                     pass
-            return {"ok": False, "error": str(e), "sql": sql}
+            result = {"ok": False, "error": str(e), "sql": sql}
+            log_tool_call(
+                "sql_query",
+                action=self.backend,
+                input_obj={"sql": sql},
+                output_obj=result,
+                ok=False,
+                seconds=time.time() - t0,
+                meta={"backend": self.backend, "error": str(e)},
+            )
+            return result
 
     def schema_search(self, q, k=10):
+        t0 = time.time()
         q_upper = str(q).upper()
         tokens = set(re.findall(r"[A-Z][A-Z0-9_]{2,}", q_upper))
         hits = []
@@ -515,7 +676,17 @@ class SQLTool:
             if score:
                 hits.append((score, meta))
         hits.sort(key=lambda x: x[0], reverse=True)
-        return [x[1] for x in hits[:k]]
+        result = [x[1] for x in hits[:k]]
+        log_tool_call(
+            "schema_search",
+            action=self.backend,
+            input_obj={"query": q, "top_k": k},
+            output_obj={"tables": [r.get("table") for r in result], "count": len(result)},
+            ok=True,
+            seconds=time.time() - t0,
+            meta={"backend": self.backend},
+        )
+        return result
 
 
 class RetrievalTool:
@@ -564,10 +735,21 @@ class RetrievalTool:
     def search(self, query, k=8):
         from sklearn.metrics.pairwise import cosine_similarity
 
+        t0 = time.time()
         v = self.vectorizer.transform([query])
         scores = cosine_similarity(v, self.matrix).ravel()
         idxs = scores.argsort()[::-1][:k]
-        return [{"score": round(float(scores[i]), 3), "text": self.docs[i][:2500]} for i in idxs]
+        result = [{"score": round(float(scores[i]), 3), "text": self.docs[i][:2500]} for i in idxs]
+        log_tool_call(
+            "tfidf_search",
+            action="search",
+            input_obj={"query": query, "top_k": k},
+            output_obj={"count": len(result), "hits": result},
+            ok=True,
+            seconds=time.time() - t0,
+            meta={"docs_indexed": len(self.docs)},
+        )
+        return result
 
 
 class QdrantRetrievalTool:
@@ -605,7 +787,16 @@ class QdrantRetrievalTool:
         if self.encoder is None:
             from sentence_transformers import SentenceTransformer
 
+            t0 = time.time()
             self.encoder = SentenceTransformer(self.embed_model)
+            log_tool_call(
+                "qdrant_encoder",
+                action="load",
+                input_obj={"embed_model": self.embed_model},
+                output_obj={"loaded": True},
+                ok=True,
+                seconds=time.time() - t0,
+            )
 
     def preload_encoder(self):
         self._load_encoder()
@@ -613,7 +804,17 @@ class QdrantRetrievalTool:
 
     def search(self, query, k=8):
         if not self.ok:
+            log_tool_call(
+                "qdrant_search",
+                action="search",
+                input_obj={"query": query, "top_k": k, "collection": self.collection},
+                output_obj={"error": self.error, "hits": []},
+                ok=False,
+                seconds=0,
+                meta={"collection": self.collection, "vector_name": self.vector_name},
+            )
             return []
+        t0 = time.time()
         try:
             self._load_encoder()
             vector = self.encoder.encode([query], normalize_embeddings=True, show_progress_bar=False)[0].tolist()
@@ -646,9 +847,27 @@ class QdrantRetrievalTool:
                         "text": str(payload.get("text", ""))[:2500],
                     }
                 )
+            log_tool_call(
+                "qdrant_search",
+                action="search",
+                input_obj={"query": query, "top_k": k, "collection": self.collection, "vector_name": self.vector_name},
+                output_obj={"count": len(rows), "hits": rows},
+                ok=True,
+                seconds=time.time() - t0,
+                meta={"collection": self.collection, "vector_name": self.vector_name},
+            )
             return rows
         except Exception as e:
             self.error = str(e)
+            log_tool_call(
+                "qdrant_search",
+                action="search",
+                input_obj={"query": query, "top_k": k, "collection": self.collection, "vector_name": self.vector_name},
+                output_obj={"error": str(e), "hits": []},
+                ok=False,
+                seconds=time.time() - t0,
+                meta={"collection": self.collection, "vector_name": self.vector_name, "error": str(e)},
+            )
             return []
 
 
@@ -658,7 +877,16 @@ def build_hybrid_evidence_pack(tfidf_docs, qdrant_docs, top_k=HYBRID_TOP_K):
     This is intentionally lightweight: it improves evidence ordering for model
     fallback without making static-answer fast paths slower.
     """
+    t0 = time.time()
     if not ENABLE_HYBRID_RRF:
+        log_tool_call(
+            "hybrid_rrf",
+            action="disabled",
+            input_obj={"tfidf_count": len(tfidf_docs or []), "qdrant_count": len(qdrant_docs or []), "top_k": top_k},
+            output_obj={"enabled": False},
+            ok=True,
+            seconds=time.time() - t0,
+        )
         return []
 
     fused = {}
@@ -707,7 +935,17 @@ def build_hybrid_evidence_pack(tfidf_docs, qdrant_docs, top_k=HYBRID_TOP_K):
         item["rrf_score"] = round(float(item["rrf_score"]), 6)
         out.append(item)
     out.sort(key=lambda x: (-x["rrf_score"], x["best_rank"]))
-    return out[:top_k]
+    result = out[:top_k]
+    log_tool_call(
+        "hybrid_rrf",
+        action="fuse",
+        input_obj={"tfidf_count": len(tfidf_docs or []), "qdrant_count": len(qdrant_docs or []), "top_k": top_k},
+        output_obj={"count": len(result), "evidence": result},
+        ok=True,
+        seconds=time.time() - t0,
+        meta={"rrf_k": RRF_K},
+    )
+    return result
 
 
 def load_questions():
@@ -851,6 +1089,23 @@ def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
         audit_rec["prompt"] = prompt
         audit_rec["raw_answer"] = ans
     LLM_AUDIT_LOG.append(audit_rec)
+    log_tool_call(
+        "llm_generate",
+        action=stage,
+        qid=qid,
+        input_obj={"prompt_hash": audit_rec["prompt_hash"], "prompt_preview": audit_rec["prompt_preview"]},
+        output_obj={"answer_hash": audit_rec["sanitized_answer_hash"], "answer_preview": audit_rec["sanitized_answer_preview"]},
+        ok=True,
+        seconds=sec,
+        input_tokens=input_len,
+        output_tokens=completion,
+        meta={
+            "model_path": str(MODEL),
+            "max_new_tokens": max_new_tokens,
+            "do_sample": GEN_DO_SAMPLE,
+            "repetition_penalty": GEN_REPETITION_PENALTY,
+        },
+    )
     return clean
 
 
@@ -2374,6 +2629,7 @@ def hard_sql_answer(sqltool, qid, q, docs, schemas):
 
 
 def answer_one(sqltool, retriever, qdrant_retriever, tok, model, qid, q):
+    set_tool_audit_context(qid=qid)
     ans, obs = static_answer_bank_answer(qid)
     if ans:
         return ans, obs
@@ -2452,6 +2708,10 @@ def _write_run_files(out_dir, result_df, debug, token_df, summary):
     with (out_dir / "best_rewrite_guard.jsonl").open("w", encoding="utf-8") as f:
         for rec in REWRITE_GUARD_LOG:
             f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    with (out_dir / "best_tool_audit.jsonl").open("w", encoding="utf-8") as f:
+        for rec in TOOL_AUDIT_LOG:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    (out_dir / "best_tool_summary.json").write_text(json.dumps(tool_audit_summary(), ensure_ascii=False, indent=2, default=str))
     (out_dir / "best_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
 
 
@@ -2490,6 +2750,8 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUT
         "gen_repetition_penalty": GEN_REPETITION_PENALTY,
         "llm_audit_rows": len(LLM_AUDIT_LOG),
         "llm_audit_include_prompt": LLM_AUDIT_INCLUDE_PROMPT,
+        "tool_audit_rows": len(TOOL_AUDIT_LOG),
+        "tool_summary": tool_audit_summary(),
         "rewrite_guard_enabled": MODEL_REWRITE_ENTITY_GUARD,
         "final_answer_security_guard": FINAL_ANSWER_SECURITY_GUARD,
         "rewrite_guard_rows": len(REWRITE_GUARD_LOG),
@@ -2538,6 +2800,7 @@ def main():
         rows, debug = [], {}
         for _, r in selected_qdf.iterrows():
             qid, q = str(r[id_col]).strip(), str(r[q_col])
+            set_tool_audit_context(qid=qid, request_uuid=None, route="batch_fast")
             print("\n==", qid, "==")
             print(q)
             q_t0 = time.time()
@@ -2602,6 +2865,7 @@ def main():
 
     for _, r in selected_qdf.iterrows():
         qid, q = str(r[id_col]).strip(), str(r[q_col])
+        set_tool_audit_context(qid=qid, request_uuid=None, route="batch")
         print("\n==", qid, "==")
         print(q)
         q_t0 = time.time()
