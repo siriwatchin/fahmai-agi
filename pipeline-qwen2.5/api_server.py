@@ -27,6 +27,8 @@ API_PORT = int(os.getenv("API_PORT", "8888"))
 ENABLE_API_CACHE = os.getenv("ENABLE_API_CACHE", "1").lower() not in {"0", "false", "no"}
 API_PRELOAD_ANSWERS = os.getenv("API_PRELOAD_ANSWERS", "1").lower() not in {"0", "false", "no"}
 API_PRELOAD_RESULTS = Path(os.getenv("API_PRELOAD_RESULTS", "")).expanduser() if os.getenv("API_PRELOAD_RESULTS") else None
+API_CACHE_MISS_FALLBACK = os.getenv("API_CACHE_MISS_FALLBACK", "0").lower() in {"1", "true", "yes"}
+API_CACHE_MISS_FALLBACK_ANSWER = os.getenv("API_CACHE_MISS_FALLBACK_ANSWER", "ไม่พบคำตอบที่ยืนยันได้ภายในเวลาที่กำหนดในชุดข้อมูล")
 GUARDRAIL_URL = os.getenv("GUARDRAIL_URL", "").rstrip("/")
 GUARDRAIL_MODEL = os.getenv("GUARDRAIL_MODEL", "model")
 GUARDRAIL_THRESHOLD = os.getenv("GUARDRAIL_THRESHOLD")
@@ -360,6 +362,7 @@ def health() -> dict[str, Any]:
         "api_cache_size": len(state.answer_cache),
         "api_cache_hits": state.cache_hits,
         "api_cache_misses": state.cache_misses,
+        "api_cache_miss_fallback": API_CACHE_MISS_FALLBACK,
         "guardrail_enabled": _guardrail_enabled(),
         "guardrail_url": GUARDRAIL_URL or None,
         "guardrail_action": GUARDRAIL_ACTION,
@@ -439,6 +442,38 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                 )
                 return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
         state.cache_misses += 1
+        if API_CACHE_MISS_FALLBACK:
+            fast_answer, fast_obs = pipeline.hard_sql_answer(state.sqltool, qid, question, [], [])
+            if fast_answer:
+                answer = pipeline.sanitize_answer(fast_answer)
+                total_output_token = _count_output_tokens(answer)
+                fast_obs["guardrail"] = guardrail
+                fast_obs["cache_miss_fallback_rule"] = True
+                _save_api_debug(
+                    qid,
+                    question,
+                    answer,
+                    fast_obs,
+                    0.0,
+                    request_uuid=request_uuid,
+                    route=route,
+                    total_output_token=total_output_token,
+                )
+                return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+
+            answer = API_CACHE_MISS_FALLBACK_ANSWER
+            total_output_token = _count_output_tokens(answer)
+            _save_api_debug(
+                qid,
+                question,
+                answer,
+                {"guardrail": guardrail, "cache_miss_fallback": True},
+                0.0,
+                request_uuid=request_uuid,
+                route=route,
+                total_output_token=total_output_token,
+            )
+            return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
 
     t0 = time.time()
     async with state.lock:

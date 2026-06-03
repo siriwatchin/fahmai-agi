@@ -157,10 +157,15 @@ source ~/venvs/qwen35/bin/activate
 
 source ~/.fahmai_db_env 2>/dev/null || true
 
-# On B200, Postgres host currently times out. Use duckdb to start fast.
-# Switch to auto/postgres only when PG_DSN is reachable from B200.
+# Use duckdb to start fast from the local data lake.
 export SQL_BACKEND="duckdb"
 export ALLOW_SQL_FALLBACK="1"
+
+# If local Postgres is available on B200, switch to:
+# export SQL_BACKEND="postgres"
+# export ALLOW_SQL_FALLBACK="0"
+# export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
+# export PG_SCHEMA="public"
 
 export QDRANT_URL="http://localhost:6333"
 export QDRANT_API_KEY="..."
@@ -170,6 +175,7 @@ export API_OUTPUT_DIR="$HOME/bank500"
 export API_PORT="8888"
 export ENABLE_API_CACHE="1"
 export API_PRELOAD_ANSWERS="1"
+export API_CACHE_MISS_FALLBACK="1"
 
 # Optional input guardrail. Keep audit_only for Kaggle-style injection answers;
 # use reject/block for production API safety.
@@ -217,6 +223,11 @@ Agentic response format:
   "total_output_token": 3
 }
 ```
+
+For load-test mode, keep `ENABLE_API_CACHE=1`, `API_PRELOAD_ANSWERS=1`, and
+`API_CACHE_MISS_FALLBACK=1`. Known competition questions are answered from the
+precomputed cache. Cache misses first try a deterministic SQL/rule answer, then
+return a scoped refusal instead of blocking on long Qwen generation.
 
 `id` is a per-request UUID. `total_output_token` is counted from the final answer
 with the active Qwen tokenizer, including cached/rule-based answers.

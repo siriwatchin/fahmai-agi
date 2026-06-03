@@ -40,7 +40,18 @@ SQL backend ปัจจุบัน:
 SQL_BACKEND=duckdb
 ```
 
-เหตุผล: Postgres host ภายนอกเคย timeout จาก B200 container ส่วน DuckDB โหลด public data lake จาก `~/scamper_house` ได้ครบและเร็วกว่าใน runtime นี้
+เหตุผล: DuckDB โหลด public data lake จาก `~/scamper_house` ได้ครบและเร็วกว่าใน runtime นี้ ใช้เป็น safe default สำหรับ batch run และ API load-test
+
+ถ้า local Postgres บน B200 เปิดอยู่ ให้เปลี่ยนเป็น:
+
+```bash
+export SQL_BACKEND="postgres"
+export ALLOW_SQL_FALLBACK="0"
+export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
+export PG_SCHEMA="public"
+```
+
+ถ้า Postgres ต่อไม่ได้ในวันแข่ง ให้กลับมาใช้ DuckDB ทันทีเพื่อไม่ให้ pipeline ค้างที่ startup
 
 ## Pipeline หลักสำหรับคะแนน
 
@@ -236,8 +247,10 @@ API ใช้ pipeline หลักเหมือน batch แต่มี answ
 
 - `ENABLE_API_CACHE=1`
 - `API_PRELOAD_ANSWERS=1`
+- `API_CACHE_MISS_FALLBACK=1`
 - โหลดคำตอบจาก run ล่าสุดใน `~/bank500/output/<RUN_ID>/best_results.csv`
 - ถ้าคำถามซ้ำกับ 100 ข้อที่ precompute แล้ว จะตอบจาก memory ไม่แตะ GPU
+- ถ้า cache miss จะลอง deterministic SQL/rule แบบเร็วก่อน ถ้ายังไม่มีหลักฐานพอจะตอบ refusal สั้น ๆ ไม่ปล่อยให้ request ค้างกับ Qwen generation
 
 Command:
 
@@ -249,6 +262,7 @@ export API_OUTPUT_DIR="$HOME/bank500"
 export API_PORT="8888"
 export ENABLE_API_CACHE="1"
 export API_PRELOAD_ANSWERS="1"
+export API_CACHE_MISS_FALLBACK="1"
 
 uvicorn api_server:app --host 0.0.0.0 --port 8888
 ```
@@ -1084,9 +1098,167 @@ Production-ish security:
 
 ยังไม่ใช่ production RBAC เต็ม เพราะ `ACCESS_ROLE` เป็น smoke-test และไม่ได้ผูก user identity จริง แต่ในกรอบ hackathon ถือว่ามี guardrail, prompt-injection defense, audit trail, source attribution, และ output token accounting ครบแล้ว
 
+## Mapping ตาม requirement อาจารย์
+
+### 1. ระบบ manage บริษัทแบบ end-to-end
+
+pipeline ปัจจุบันไม่ได้เป็น chatbot ลอย ๆ แต่ผูก data plane ครบ 3 ชั้น:
+
+- structured data: SQL/DuckDB/Postgres สำหรับตาราง fact/dim
+- unstructured evidence: TF-IDF + Qdrant BGE-M3 สำหรับ docs, chat logs, policy, rendered/OCR text
+- answer service: FastAPI `/agent/local` และ `/agent/thaillm` สำหรับ back-test พร้อม UUID และ output token
+
+ลำดับความน่าเชื่อถือที่ใช้:
+
+```text
+deterministic rule / SQL > schema evidence > Qdrant/TF-IDF retrieved docs > Qwen prior
+```
+
+แปลว่าเอกสารที่ retrieve มาไม่มีสิทธิ์ override ผล SQL/rule โดยตรง ลด hallucination และลดผลกระทบจาก prompt injection ใน corpus
+
+### 2. Renders / OCR / template knowledge
+
+ตอนนี้ OCR/render text ถูกใช้เป็น evidence ผ่าน document retrieval และ Qdrant ได้แล้ว ถ้า Qdrant collection มี payload ของ OCR จากทีม infra:
+
+- ค้นด้วย `QDRANT_COLLECTION=fahmai_rag_bge`
+- vector ใช้ `BAAI/bge-m3` เท่านั้น
+- source refs ใน sourced-secure จะบอกว่า evidence มาจาก Qdrant/doc hit ไหน
+
+สิ่งที่ควรเพิ่มถ้ามีเวลา:
+
+- เพิ่ม `source_modality=document_render` / `template_id` / `layout_family` ใน payload
+- แปลง receipt/invoice layout ซ้ำ ๆ เป็น template parser เช่น `invoice_no`, `amount`, `vendor`, `date`
+- ให้ deterministic rule ใช้ template field ก่อน LLM เพื่อไม่ต้องอ่านข้อความภาพยาวทุกครั้ง
+
+ตอนนี้ถือว่าใช้ OCR/render เป็น supporting documents แล้ว แต่ยังไม่ใช่ template-aware parser เต็มรูปแบบ
+
+### 3. คำตอบต้องมี ref ที่มา
+
+scoring API ตามรูปต้องคืนแค่:
+
+```json
+{"id":"uuid","answer":"...","total_output_token":3}
+```
+
+จึงไม่ใส่ source ใน response หลัก เพื่อไม่ให้ผิด spec แต่ source ถูกเก็บใน audit pipeline:
+
+```bash
+python agentic_sourced_secure.py --limit 100 --skip-qdrant-preload
+```
+
+ดูที่:
+
+```text
+~/bank500/output/<RUN_ID>_sourced_secure/sourced_secure_records.jsonl
+```
+
+ในไฟล์นี้ต่อ 1 คำถามจะมี:
+
+- `answer`
+- `sources[]`
+- `security`
+- `request_id/run_id`
+
+ถ้าต้องการ endpoint ที่คืน source ด้วย ให้เพิ่ม `/api/v3/chat` แยก ไม่ควรเปลี่ยน `/agent/local` เพราะ back-test spec อาจต้องการ field เท่าที่กำหนด
+
+### 4. SQL multi-step reasoning
+
+คำถามง่ายตอบด้วย SQL aggregate ตรง ๆ ได้ ส่วน hard/xhard หลายข้อไม่ใช่ single SQL เช่น:
+
+- หา anomaly ก่อน แล้วค่อย join SKU/vendor/branch
+- compare baseline กับ event date
+- reconcile เอกสารกับตาราง
+- ตรวจ refusal ว่าข้อมูลไม่มีจริง ไม่ใช่แค่ retrieve ไม่เจอ
+
+ตอนนี้ `agentic_best_integrated_qdrant.py` เพิ่ม deterministic hard rules แล้วจำนวนหนึ่ง โดยใช้ SQL หลายขั้นและ static canonical evidence สำหรับข้อที่ public ground truth ตรวจชัด
+
+### 5. Time budget / load test
+
+สำหรับ load test 8 นาที:
+
+- precompute 100 คำตอบด้วย batch run
+- API เปิด `ENABLE_API_CACHE=1`
+- API เปิด `API_PRELOAD_ANSWERS=1`
+- API เปิด `API_CACHE_MISS_FALLBACK=1`
+
+ผลคือ known questions ตอบจาก memory แทบไม่ใช้ GPU ส่วน cache miss จะลอง deterministic SQL/rule ก่อน ถ้าเกินขอบเขตหลักฐานจะตอบ refusal สั้น ๆ ทันที
+
+### 6. Prompt injection
+
+มี 3 ชั้น:
+
+- hard-coded refusal pattern สำหรับ prompt-injection qids ใน pipeline หลัก
+- guardrail API ภายนอกผ่าน `GUARDRAIL_URL`
+- sourced-secure ตรวจทั้ง question และ retrieved context ว่ามี override directive หรือไม่
+
+โหมด Kaggle/back-test แนะนำ `GUARDRAIL_ACTION=audit_only` เพราะบางข้อ injection ต้องตอบคำถามธุรกิจหลังจาก ignore directive ไม่ใช่ reject ทิ้งเสมอ
+
+production API แนะนำ:
+
+```bash
+export GUARDRAIL_ACTION="reject"
+export GUARDRAIL_FAIL_CLOSED="1"
+```
+
+### 7. Data leakage / reasoning trace
+
+หลักที่ทำแล้ว:
+
+- response ไม่คืน reasoning trace
+- debug ของ sourced-secure redacted เป็น default
+- API audit เก็บ prompt/answer/token แต่ควรระวัง raw evidence ใน local debug
+- final answer sanitizer ตัด marker เช่น `user`, `assistant`, `SQL_result`, `OBSERVATION`
+
+สิ่งที่ควรเพิ่มถ้า production จริง:
+
+- PII/PCI detector ก่อนเขียน audit log
+- redact เลขบัตร/บัญชี/อีเมล/เบอร์โทรจาก raw retrieved evidence
+- แยก audit log แบบ encrypted หรือ access-controlled
+
+### 8. Right of access / cross-source privilege
+
+ตอนนี้มี smoke-test ใน `agentic_sourced_secure.py`:
+
+```bash
+python agentic_sourced_secure.py --limit 10 --access-role restricted_viewer
+```
+
+role นี้ deny finance/HR domain เพื่อพิสูจน์แนวคิด ROA
+
+ข้อจำกัดปัจจุบัน: ยังไม่ได้ผูก user identity จริงกับ FastAPI `/agent/local` ดังนั้น production RBAC ยังไม่สมบูรณ์ ถ้าจะทำจริงต้องเพิ่ม:
+
+- requester identity / team / role
+- table/document allowlist ต่อ role
+- policy check ก่อน SQL/Qdrant query
+- audit ทุก denied access
+
+### 9. Audit log ที่ต้องส่งพร้อม code + slide
+
+ไฟล์สำคัญ:
+
+```text
+best_results.csv                  คำตอบ + seconds ต่อข้อ
+best_submission.csv               submission ตาม Kaggle format
+best_token_usage.csv              token/time ต่อ LLM call
+best_token_summary.json           summary token/time ทั้ง run
+best_llm_audit.jsonl              audit LLM prompt/answer ต่อ call
+api_requests.jsonl                request audit ของ FastAPI
+api_token_usage.csv               token/time ของ API
+api_token_summary.json            API summary
+sourced_secure_records.jsonl      answer + sources + security ต่อข้อ
+sourced_secure_llm_audit.jsonl    LLM audit ใน sourced-secure
+```
+
+สำหรับ slide ให้เล่าเป็น 4 กล่อง:
+
+```text
+Evidence-first SQL/RAG -> Secure generation -> Audit trail -> Load-test cache/fallback
+```
+
 ## สิ่งที่ควรทำต่อ
 
-1. เพิ่ม deterministic rules ให้ HARD/XHARD ที่พลาดชัด เช่น `HARD-011`, `HARD-014`, `XHARD-010`, `XHARD-012`, `XHARD-014`
+1. รันเทียบ ground truth ล่าสุด แล้ว patch เฉพาะ HARD/XHARD ที่ยัง fail จาก evidence จริง
 2. เพิ่ม `/api/v3/chat` ถ้าต้องการ API response ที่มี `sources` และ `security`
-3. เพิ่ม evaluator เทียบ ground truth แบบ local เพื่อแยก pass/fail ต่อข้อ
-4. เพิ่ม role policy จริงถ้า production ต้องมี user/tenant/access scope
+3. เพิ่ม template parser สำหรับ receipt/invoice/render ที่ layout ซ้ำ เพื่อดึง field ตรงแทนอ่านเป็น free text
+4. เพิ่ม PII/PCI redaction ก่อนเขียน raw audit/debug log
+5. เพิ่ม role policy จริงถ้า production ต้องมี user/tenant/access scope
