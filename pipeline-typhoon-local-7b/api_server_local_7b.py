@@ -207,13 +207,47 @@ def _read_tool_json(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+def _sku_from_question(question: str) -> str | None:
+    match = re.search(r"\b[A-Z]{2,}(?:-[A-Z0-9]+)+\b", str(question or ""))
+    return match.group(0) if match else None
+
+
+def _is_msrp_question(question: str) -> bool:
+    q = str(question or "").lower()
+    return any(word in q for word in ["msrp", "ราคา", "เท่าไหร่"])
+
+
+def _product_msrp_sql_candidates(sku: str) -> list[str]:
+    return [
+        (
+            'SELECT sku_id, msrp_thb '
+            'FROM public."DIM_PRODUCT" '
+            f"WHERE sku_id = '{sku}' "
+            "LIMIT 1"
+        ),
+        (
+            "SELECT sku_id, msrp_thb "
+            "FROM DIM_PRODUCT "
+            f"WHERE sku_id = '{sku}' "
+            "LIMIT 1"
+        ),
+    ]
+
+
 def _preflight_evidence_trace(question: str) -> list[dict[str, Any]]:
     if hosted_api.state is None:
         return []
-    candidates = [
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    sku = _sku_from_question(question)
+    if sku and _is_msrp_question(question):
+        candidates.extend(
+            ("postgres_execute_readonly_sql", {"sql": sql, "limit": 1})
+            for sql in _product_msrp_sql_candidates(sku)
+        )
+    candidates.extend([
         ("domain_evidence_pack", {"question": question, "top_k": 5}),
         ("postgres_search_schema", {"query": question, "schema": "public"}),
-    ]
+    ])
     trace: list[dict[str, Any]] = []
     for name, args in candidates:
         try:
@@ -222,7 +256,9 @@ def _preflight_evidence_trace(question: str) -> list[dict[str, Any]]:
             trace.append({"step": "7b_preflight", "tool": name, "arguments": args, "result": json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)})
             continue
         trace.append({"step": "7b_preflight", "tool": name, "arguments": args, "result": _compact_tool_result(result)})
-        break
+        parsed = _safe_json_loads(result)
+        if not isinstance(parsed, dict) or parsed.get("ok") is not False:
+            break
     return trace
 
 
@@ -248,29 +284,26 @@ def _money(value: Any) -> str:
 
 
 def _deterministic_easy_answer(question: str) -> tuple[str | None, dict[str, Any]]:
-    q = str(question or "")
-    sku_match = re.search(r"\b[A-Z]{2,}[A-Z0-9-]*-\d{3,4}\b", q)
-    if sku_match and any(word.lower() in q.lower() for word in ["msrp", "ราคา", "เท่าไหร่"]):
-        sku = sku_match.group(0)
-        sql = (
-            "SELECT sku_id, product_name, msrp_thb "
-            "FROM DIM_PRODUCT "
-            f"WHERE sku_id = '{sku}' "
-            "LIMIT 1"
-        )
-        data = _read_tool_json("postgres_execute_readonly_sql", {"sql": sql, "limit": 1})
-        rows = data.get("rows") or []
-        if data.get("ok") and rows:
-            row = rows[0]
-            answer = f"MSRP ของสินค้ารหัส {row.get('sku_id', sku)} คือ {_money(row.get('msrp_thb'))} บาท"
-            validation = {
-                "status": "answered",
-                "confidence": "high",
-                "refs": [{"type": "postgres", "source": "DIM_PRODUCT", "sql": sql}],
-                "security": {},
-                "route": {"intent_type": "deterministic_7b_easy", "tool": "postgres_execute_readonly_sql"},
-            }
-            return answer, {"validation": validation, "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+    sku = _sku_from_question(question)
+    if sku and _is_msrp_question(question):
+        last_error: dict[str, Any] = {}
+        for sql in _product_msrp_sql_candidates(sku):
+            data = _read_tool_json("postgres_execute_readonly_sql", {"sql": sql, "limit": 1})
+            rows = data.get("rows") or []
+            if data.get("ok") and rows:
+                row = rows[0]
+                answer = f"MSRP ของสินค้ารหัส {row.get('sku_id', sku)} คือ {_money(row.get('msrp_thb'))} บาท"
+                validation = {
+                    "status": "answered",
+                    "confidence": "high",
+                    "refs": [{"type": "postgres", "source": "DIM_PRODUCT", "sql": sql}],
+                    "security": {},
+                    "route": {"intent_type": "deterministic_7b_easy", "tool": "postgres_execute_readonly_sql"},
+                }
+                return answer, {"validation": validation, "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+            last_error = data
+        if last_error:
+            return None, {"last_error": last_error}
     return None, {}
 
 
