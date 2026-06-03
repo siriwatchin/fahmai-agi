@@ -29,6 +29,7 @@ API_PRELOAD_ANSWERS = os.getenv("API_PRELOAD_ANSWERS", "1").lower() not in {"0",
 API_PRELOAD_RESULTS = Path(os.getenv("API_PRELOAD_RESULTS", "")).expanduser() if os.getenv("API_PRELOAD_RESULTS") else None
 API_CACHE_MISS_FALLBACK = os.getenv("API_CACHE_MISS_FALLBACK", "0").lower() in {"1", "true", "yes"}
 API_CACHE_MISS_FALLBACK_ANSWER = os.getenv("API_CACHE_MISS_FALLBACK_ANSWER", "ไม่พบคำตอบที่ยืนยันได้ภายในเวลาที่กำหนดในชุดข้อมูล")
+API_FAST_ONLY = os.getenv("API_FAST_ONLY", "0").lower() in {"1", "true", "yes"}
 GUARDRAIL_URL = os.getenv("GUARDRAIL_URL", "").rstrip("/")
 GUARDRAIL_MODEL = os.getenv("GUARDRAIL_MODEL", "model")
 GUARDRAIL_THRESHOLD = os.getenv("GUARDRAIL_THRESHOLD")
@@ -290,6 +291,26 @@ def _save_api_debug(
 
 
 def _load_runtime() -> RuntimeState:
+    question_to_id = _load_question_index()
+    print("api: question index:", len(question_to_id), flush=True)
+
+    if API_FAST_ONLY:
+        print("api: fast-only mode; skipping sql/retrieval/qdrant/qwen load", flush=True)
+        answer_cache = _load_answer_cache(question_to_id)
+        print("api: answer cache:", len(answer_cache), "enabled:", ENABLE_API_CACHE, flush=True)
+        return RuntimeState(
+            sqltool=None,
+            retriever=None,
+            qdrant_retriever=None,
+            tok=None,
+            model=None,
+            question_to_id=question_to_id,
+            answer_cache=answer_cache,
+            cache_hits=0,
+            cache_misses=0,
+            lock=asyncio.Lock(),
+        )
+
     print("api: loading sql...", flush=True)
     sqltool = pipeline.SQLTool()
     print(
@@ -329,8 +350,6 @@ def _load_runtime() -> RuntimeState:
     tok, model = pipeline.load_model()
     print("api: model ready", flush=True)
 
-    question_to_id = _load_question_index()
-    print("api: question index:", len(question_to_id), flush=True)
     answer_cache = _load_answer_cache(question_to_id)
     print("api: answer cache:", len(answer_cache), "enabled:", ENABLE_API_CACHE, flush=True)
 
@@ -376,6 +395,7 @@ def health() -> dict[str, Any]:
         "api_cache_hits": state.cache_hits,
         "api_cache_misses": state.cache_misses,
         "api_cache_miss_fallback": API_CACHE_MISS_FALLBACK,
+        "api_fast_only": API_FAST_ONLY,
         "static_answer_bank_enabled": pipeline.ENABLE_STATIC_ANSWER_BANK,
         "static_answer_bank_path": str(pipeline.ANSWER_BANK_PATH),
         "static_answer_bank_version": pipeline.ANSWER_BANK_VERSION,
@@ -460,7 +480,9 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                 return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
         state.cache_misses += 1
         if API_CACHE_MISS_FALLBACK:
-            fast_answer, fast_obs = pipeline.hard_sql_answer(state.sqltool, qid, question, [], [])
+            fast_answer, fast_obs = (None, {})
+            if state.sqltool is not None:
+                fast_answer, fast_obs = pipeline.hard_sql_answer(state.sqltool, qid, question, [], [])
             if fast_answer:
                 answer = pipeline.sanitize_answer(fast_answer)
                 total_output_token = _count_output_tokens(answer)

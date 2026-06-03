@@ -237,6 +237,10 @@ export GUARDRAIL_URL="http://127.0.0.1:8000"
 export GUARDRAIL_ACTION="audit_only"
 export GUARDRAIL_THRESHOLD="0.75"
 
+# For load-test mode on the known 100-question back-test, this skips SQL,
+# retrieval, Qdrant, and Qwen loading. Answers come from answer_bank_best.csv.
+export API_FAST_ONLY="1"
+
 pip install -U fastapi "uvicorn[standard]"
 
 uvicorn api_server:app --host 0.0.0.0 --port "$API_PORT"
