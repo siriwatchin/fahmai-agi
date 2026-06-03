@@ -837,3 +837,25 @@ page calls `/api/v2/chat` by default and shows:
 
 For a public machine or shared demo URL, use the B200 host/IP instead of
 `127.0.0.1` while keeping the same port and path.
+
+If the Jupyter proxy does not expose `/demo` on the model API port, run the demo
+as a separate lightweight web service. Keep the model API running on port 8888,
+then open a second terminal:
+
+```bash
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+
+MODEL_API_URL="http://127.0.0.1:8888" \
+DEMO_WEB_PORT=8890 \
+./run_demo_web.sh
+```
+
+Open:
+
+```text
+https://b200.thescamperss6.com/user/bank500/proxy/8890/demo
+```
+
+The separate service does not load the model. It only serves the UI and proxies
+`/health`, `/api/v2/chat`, `/agent/local`, and `/agent/thaillm` to the model API.
