@@ -381,8 +381,34 @@ def _redact_for_audit(text, limit=500):
     text = re.sub(r"(?s)<think>.*?</think>", "<think:redacted>", text)
     text = re.sub(r"(?i)(hf_[A-Za-z0-9_=-]+)", "hf_<redacted>", text)
     text = re.sub(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?[^\\s,'\"]+", r"\1=<redacted>", text)
+    text = re.sub(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "<redacted:email>", text)
+    text = re.sub(r"\b(?:\+?66|0)\d{8,9}\b", "<redacted:phone>", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:limit]
+
+
+SENSITIVE_CONTEXT_FIELD_RE = re.compile(
+    r"(email|phone|mobile|tel|address|card|credit|password|secret|token|api[_-]?key|bank_account_number|account_number)",
+    re.I,
+)
+
+
+def _redact_context_value(key, value):
+    key = str(key or "")
+    if SENSITIVE_CONTEXT_FIELD_RE.search(key):
+        if value in (None, ""):
+            return value
+        return f"<redacted:{key}>"
+    if isinstance(value, str):
+        value = re.sub(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "<redacted:email>", value)
+        value = re.sub(r"\b(?:\+?66|0)\d{8,9}\b", "<redacted:phone>", value)
+    return value
+
+
+def _redact_row_for_context(row):
+    if not isinstance(row, dict):
+        return row
+    return {k: _redact_context_value(k, v) for k, v in row.items()}
 
 
 def set_tool_audit_context(qid=None, request_uuid=None, route=None):
@@ -1101,6 +1127,7 @@ def cross_source_sql_lookup(sqltool, question, docs, qdrant_docs, evidence_pack)
             res = sqltool.query(sql)
             query_count += 1
             if res.get("ok") and res.get("rows"):
+                rows = [_redact_row_for_context(r) for r in (res.get("rows", [])[:CROSS_SOURCE_ROW_LIMIT])]
                 lookups.append(
                     {
                         "entity": ent,
@@ -1108,7 +1135,7 @@ def cross_source_sql_lookup(sqltool, question, docs, qdrant_docs, evidence_pack)
                         "path": meta.get("path"),
                         "column": col_name,
                         "row_count": len(res.get("rows") or []),
-                        "rows": res.get("rows", [])[:CROSS_SOURCE_ROW_LIMIT],
+                        "rows": rows,
                         "sql": res.get("sql", sql),
                     }
                 )
