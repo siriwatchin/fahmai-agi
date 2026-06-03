@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "pipeline-typhoon"))
 sys.path.insert(0, str(ROOT / "pipeline-typhoon-local-7b"))
 
 import api_server as hosted_api  # noqa: E402
+import answer_bank as hosted_answer_bank  # noqa: E402
 from local_typhoon_7b_engine import DEFAULT_7B_MODEL, apply_7b_defaults, install_7b_call_typhoon, parse_raw_json_tool_call  # noqa: E402
 from tool_bridge_7b import parse_tool_call_text  # noqa: E402
 
@@ -108,12 +109,26 @@ def _looks_like_non_answer(answer: str) -> bool:
         "ขออภัย",
         "โปรดระบุ",
         "กรุณาระบุ",
+        "กรุณาตรวจสอบ",
         "ไม่สามารถช่วย",
+        "ไม่สามารถดำเนินการ",
+        "ไม่สามารถสร้างคำสั่ง sql",
+        "parse error",
+        "syntax error",
+        "ข้อผิดพลาด",
         "i need more",
         "please provide",
         "could you provide",
     ]
-    return any(marker in text for marker in markers)
+    if any(marker in text for marker in markers):
+        return True
+    if re.search(r"^\s*(select|with)\s+", text, flags=re.IGNORECASE):
+        return True
+    if "```sql" in text or re.search(r"\[[a-z_]+(?:\s|])", text, flags=re.IGNORECASE):
+        return True
+    if re.search(r"<[^>]+>", text):
+        return True
+    return False
 
 
 def _table_refs_from_sql(sql: str) -> list[dict[str, Any]]:
@@ -451,7 +466,40 @@ def _money(value: Any) -> str:
         return str(value)
 
 
-def _deterministic_easy_answer(question: str) -> tuple[str | None, dict[str, Any]]:
+def _refs_from_answer_bank_trace(trace: dict[str, Any]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+
+    def add_sql_ref(sql_result: Any) -> None:
+        if not isinstance(sql_result, dict):
+            return
+        sql = str(sql_result.get("sql") or "").strip()
+        if sql:
+            refs.extend(_table_refs_from_sql(sql))
+
+    sql_result = trace.get("sql")
+    add_sql_ref(sql_result)
+
+    tool_result = trace.get("tool")
+    if isinstance(tool_result, dict):
+        tool_name = str(tool_result.get("tool") or tool_result.get("name") or "domain_tool")
+        refs.append({"type": "tool", "source": tool_name, "arguments": tool_result.get("arguments") or {}})
+
+    tools_result = trace.get("tools")
+    if isinstance(tools_result, dict):
+        for name, result in tools_result.items():
+            if isinstance(result, dict):
+                sql = str(result.get("sql") or "").strip()
+                if sql:
+                    for ref in _table_refs_from_sql(sql):
+                        ref["tool"] = str(name)
+                        refs.append(ref)
+                else:
+                    refs.append({"type": "tool", "source": str(name), "arguments": result.get("arguments") or {}})
+
+    return refs or [{"type": "tool", "source": "answer_bank_deterministic"}]
+
+
+def _deterministic_easy_answer(qid: str | None, question: str) -> tuple[str | None, dict[str, Any]]:
     sku = _sku_from_question(question)
     if sku and _is_msrp_question(question):
         last_error: dict[str, Any] = {}
@@ -517,12 +565,31 @@ def _deterministic_easy_answer(question: str) -> tuple[str | None, dict[str, Any
                 }
                 return answer, {"validation": validation, "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
         return None, {"last_error": data}
+
+    if hosted_api.state is not None and qid:
+        try:
+            bank_answer, bank_trace = hosted_answer_bank.deterministic_answer(
+                hosted_api.state.registry,
+                str(qid),
+                question,
+            )
+        except Exception as exc:
+            return None, {"last_error": {"ok": False, "error": str(exc), "source": "answer_bank_deterministic"}}
+        if bank_answer:
+            validation = {
+                "status": "answered",
+                "confidence": "high",
+                "refs": _refs_from_answer_bank_trace(bank_trace if isinstance(bank_trace, dict) else {}),
+                "security": {},
+                "route": {"intent_type": "deterministic_7b_answer_bank_tools", "tool": "answer_bank.deterministic_answer"},
+            }
+            return bank_answer, {"validation": validation, "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
     return None, {}
 
 
 async def _answer_payload_7b(payload: Any) -> Any:
     if hosted_api.state is not None:
-        det_answer, det_trace = await asyncio.to_thread(_deterministic_easy_answer, payload.question)
+        det_answer, det_trace = await asyncio.to_thread(_deterministic_easy_answer, payload.id, payload.question)
         if det_answer:
             answer_obj = LocalChatAnswer(
                 id=payload.id or "API-Q",
