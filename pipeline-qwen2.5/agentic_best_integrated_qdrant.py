@@ -18,12 +18,14 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-WORK = Path.home() / "bank500"
-SRC = Path.home() / "scamper_house"
-DATA = SRC / "fah-mai-the-finale-enterprise-data-agentic-showdown"
-QUESTIONS_CSV = SRC / "questions.csv"
-QUESTIONS_XLSX = SRC / "question.xlsx"
-MODEL = SRC / "qwen35/models/Qwen2.5-7B-Instruct"
+WORK = Path(os.getenv("WORK_ROOT", str(Path.home() / "bank500"))).expanduser()
+SRC = Path(os.getenv("FAHMAI_SRC_ROOT", str(Path.home() / "scamper_house"))).expanduser()
+DATA = Path(
+    os.getenv("FAHMAI_DATA_DIR", str(SRC / "fah-mai-the-finale-enterprise-data-agentic-showdown"))
+).expanduser()
+QUESTIONS_CSV = Path(os.getenv("QUESTIONS_CSV_PATH", str(SRC / "questions.csv"))).expanduser()
+QUESTIONS_XLSX = Path(os.getenv("QUESTIONS_XLSX_PATH", str(SRC / "question.xlsx"))).expanduser()
+MODEL = Path(os.getenv("MODEL_PATH", str(SRC / "qwen35/models/Qwen2.5-7B-Instruct"))).expanduser()
 TOKEN_LOG = []
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
@@ -412,8 +414,13 @@ class QdrantRetrievalTool:
 def load_questions():
     if QUESTIONS_CSV.exists():
         qdf = pd.read_csv(QUESTIONS_CSV)
-    else:
+    elif QUESTIONS_XLSX.exists():
         qdf = pd.read_excel(QUESTIONS_XLSX)
+    else:
+        raise FileNotFoundError(
+            f"questions file not found. Set QUESTIONS_CSV_PATH or QUESTIONS_XLSX_PATH. "
+            f"Tried: {QUESTIONS_CSV}, {QUESTIONS_XLSX}"
+        )
     if str(qdf.iloc[0, 0]).strip().lower() == "id":
         qdf = qdf.iloc[1:].reset_index(drop=True)
     return qdf, qdf.columns[0], qdf.columns[1]
@@ -430,6 +437,8 @@ def load_model():
                 print("allocator_warmup: disabled", flush=True)
         except Exception as e:
             print("allocator_warmup_disable_error:", e, flush=True)
+    if not MODEL.exists():
+        raise FileNotFoundError(f"model path not found: {MODEL}. Set MODEL_PATH to the local Qwen model directory.")
     tok = AutoTokenizer.from_pretrained(MODEL)
 
     strategy = os.getenv("MODEL_LOAD_STRATEGY", "cpu_first").lower()
