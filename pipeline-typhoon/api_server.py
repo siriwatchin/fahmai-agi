@@ -30,6 +30,7 @@ REFRESH_SCHEMA_CACHE = os.getenv("REFRESH_SCHEMA_CACHE", "0").lower() in {"1", "
 QDRANT_MODE = os.getenv("QDRANT_MODE", "auto").lower()
 NO_QDRANT = os.getenv("NO_QDRANT", "0").lower() in {"1", "true", "yes"}
 MAX_STEPS = int(os.getenv("MAX_STEPS", "3"))
+USE_ANSWER_BANK = os.getenv("USE_ANSWER_BANK", "1").lower() not in {"0", "false", "no"}
 
 
 def _norm_question(text: str) -> str:
@@ -50,6 +51,8 @@ def _thai_today() -> str:
 class ChatPayload(BaseModel):
     question: str = Field(..., min_length=1)
     id: str | None = None
+    use_answer_bank: bool | None = None
+    max_steps: int | None = Field(default=None, ge=1, le=12)
 
 
 class ChatRequest(BaseModel):
@@ -57,11 +60,23 @@ class ChatRequest(BaseModel):
 
 
 class ChatAnswer(BaseModel):
+    id: str | None = None
     answer: str
+    seconds: float | None = None
+    token_usage: dict[str, int] | None = None
+    answer_bank: bool | None = None
 
 
 class ChatResponse(BaseModel):
     data: ChatAnswer
+
+
+class BatchRequest(BaseModel):
+    data: list[ChatPayload] = Field(..., min_length=1, max_length=100)
+
+
+class BatchResponse(BaseModel):
+    data: list[ChatAnswer]
 
 
 @dataclass
@@ -150,6 +165,61 @@ def _load_runtime() -> RuntimeState:
     )
 
 
+def _trace_token_usage(trace: list[dict[str, Any]]) -> dict[str, int]:
+    total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    for item in trace:
+        usage = item.get("usage") if isinstance(item, dict) else None
+        if usage:
+            pipeline._merge_usage(total, usage)
+    return total
+
+
+async def _answer_payload(payload: ChatPayload) -> ChatAnswer:
+    if state is None:
+        raise HTTPException(status_code=503, detail="runtime is not ready")
+
+    question = _norm_question(payload.question)
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+
+    qid = payload.id or state.question_to_id.get(question) or "API-Q"
+    use_answer_bank = USE_ANSWER_BANK if payload.use_answer_bank is None else payload.use_answer_bank
+
+    if _looks_like_day_question(question):
+        return ChatAnswer(id=qid, answer=_thai_today(), seconds=0.0, token_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, answer_bank=use_answer_bank)
+
+    use_qdrant_for_question = state.qdrant_mode == "always" or (
+        state.qdrant_mode == "auto" and pipeline.needs_qdrant(question)
+    )
+    question_tools = pipeline.select_tool_schemas(
+        state.registry.get_openai_tool_schemas(),
+        state.include_qdrant and use_qdrant_for_question,
+    )
+
+    t0 = time.time()
+    async with state.lock:
+        answer, trace = await asyncio.to_thread(
+            pipeline.answer_question,
+            state.registry,
+            question_tools,
+            qid,
+            question,
+            payload.max_steps or MAX_STEPS,
+            state.schema_summary,
+            use_answer_bank=use_answer_bank,
+        )
+
+    seconds = time.time() - t0
+    _save_api_debug(qid, question, answer, trace, seconds)
+    return ChatAnswer(
+        id=qid,
+        answer=answer,
+        seconds=round(seconds, 3),
+        token_usage=_trace_token_usage(trace),
+        answer_bank=use_answer_bank,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global state
@@ -170,46 +240,22 @@ def health() -> dict[str, Any]:
         "qdrant_loaded": state.include_qdrant,
         "questions_indexed": len(state.question_to_id),
         "schema_cache": str(SCHEMA_CACHE),
+        "answer_bank_default": USE_ANSWER_BANK,
         "tools": [t["function"]["name"] for t in state.tools],
     }
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
-    if state is None:
-        raise HTTPException(status_code=503, detail="runtime is not ready")
+    return ChatResponse(data=await _answer_payload(req.data))
 
-    question = _norm_question(req.data.question)
-    if not question:
-        raise HTTPException(status_code=400, detail="question is required")
 
-    if _looks_like_day_question(question):
-        return ChatResponse(data=ChatAnswer(answer=_thai_today()))
-
-    qid = req.data.id or state.question_to_id.get(question) or "API-Q"
-    use_qdrant_for_question = state.qdrant_mode == "always" or (
-        state.qdrant_mode == "auto" and pipeline.needs_qdrant(question)
-    )
-    question_tools = pipeline.select_tool_schemas(
-        state.registry.get_openai_tool_schemas(),
-        state.include_qdrant and use_qdrant_for_question,
-    )
-
-    t0 = time.time()
-    async with state.lock:
-        answer, trace = await asyncio.to_thread(
-            pipeline.answer_question,
-            state.registry,
-            question_tools,
-            qid,
-            question,
-            MAX_STEPS,
-            state.schema_summary,
-        )
-
-    seconds = time.time() - t0
-    _save_api_debug(qid, question, answer, trace, seconds)
-    return ChatResponse(data=ChatAnswer(answer=answer))
+@app.post("/api/v1/batch", response_model=BatchResponse)
+async def batch(req: BatchRequest) -> BatchResponse:
+    answers = []
+    for payload in req.data:
+        answers.append(await _answer_payload(payload))
+    return BatchResponse(data=answers)
 
 
 if __name__ == "__main__":
