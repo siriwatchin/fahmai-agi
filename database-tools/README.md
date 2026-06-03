@@ -4,6 +4,8 @@ Reusable database/vector tools for agents that need to answer FahMai analytics q
 
 This folder is intentionally separate from model pipelines. Any agent can import `database_tools.py`, get OpenAI-style tool schemas, dispatch tool calls, and use PostgreSQL plus Qdrant safely.
 
+Detailed tool reference: [`TOOLS.md`](TOOLS.md)
+
 Secrets are read from environment variables. Do not commit `.env`.
 
 ## Install

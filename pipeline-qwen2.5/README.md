@@ -2,6 +2,8 @@
 
 Local/remote hybrid pipeline for FahMai Enterprise Data Agentic Showdown.
 
+Detailed tool reference: [`TOOLS.md`](TOOLS.md)
+
 Core tools:
 
 - PostgreSQL read-only SQL tool for structured tables.
