@@ -207,6 +207,25 @@ def _read_tool_json(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+def _preflight_evidence_trace(question: str) -> list[dict[str, Any]]:
+    if hosted_api.state is None:
+        return []
+    candidates = [
+        ("domain_evidence_pack", {"question": question, "top_k": 5}),
+        ("postgres_search_schema", {"query": question, "schema": "public"}),
+    ]
+    trace: list[dict[str, Any]] = []
+    for name, args in candidates:
+        try:
+            result = _execute_tool(name, args)
+        except Exception as exc:
+            trace.append({"step": "7b_preflight", "tool": name, "arguments": args, "result": json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)})
+            continue
+        trace.append({"step": "7b_preflight", "tool": name, "arguments": args, "result": _compact_tool_result(result)})
+        break
+    return trace
+
+
 def _apply_trace_validation(answer_obj: Any, trace: list[dict[str, Any]], route: dict[str, Any] | None = None) -> Any:
     route_meta = route or {"intent_type": "local_7b_repair"}
     local_answer = _to_local_answer(answer_obj, default_route=route_meta)
@@ -274,10 +293,11 @@ async def _answer_payload_7b(payload: Any) -> Any:
             )
             return answer_obj
 
+    preflight_trace = await asyncio.to_thread(_preflight_evidence_trace, payload.question)
     answer_obj = await _base_answer_payload(payload)
     first = _tool_call_from_answer(answer_obj.answer)
     if not first or hosted_api.state is None:
-        return _to_local_answer(answer_obj, default_route={"intent_type": "base_pipeline_no_repair"})
+        return _apply_trace_validation(answer_obj, preflight_trace, {"intent_type": "base_pipeline_preflight"})
 
     question = payload.question
     messages = [
@@ -290,7 +310,7 @@ async def _answer_payload_7b(payload: Any) -> Any:
         },
         {"role": "user", "content": question},
     ]
-    trace: list[dict[str, Any]] = []
+    trace: list[dict[str, Any]] = list(preflight_trace)
     token_usage = dict(answer_obj.token_usage or {})
     started = time.time()
     name, args = first
