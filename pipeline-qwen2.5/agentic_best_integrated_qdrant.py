@@ -35,6 +35,15 @@ PG_DSN = os.getenv("PG_DSN", "")
 PG_SCHEMA = os.getenv("PG_SCHEMA", "public")
 SQL_BACKEND = os.getenv("SQL_BACKEND", "auto").lower()
 ALLOW_SQL_FALLBACK = os.getenv("ALLOW_SQL_FALLBACK", "1").lower() not in {"0", "false", "no"}
+DOC_TOP_K = int(os.getenv("DOC_TOP_K", "8"))
+SCHEMA_TOP_K = int(os.getenv("SCHEMA_TOP_K", "10"))
+QDRANT_TOP_K = int(os.getenv("QDRANT_TOP_K", "8"))
+GEN_MAX_INPUT_TOKENS = int(os.getenv("GEN_MAX_INPUT_TOKENS", "7000"))
+GEN_DO_SAMPLE = os.getenv("GEN_DO_SAMPLE", "0").lower() in {"1", "true", "yes"}
+GEN_TEMPERATURE = float(os.getenv("GEN_TEMPERATURE", "0.7"))
+GEN_TOP_P = float(os.getenv("GEN_TOP_P", "0.8"))
+GEN_TOP_K = int(os.getenv("GEN_TOP_K", "20"))
+GEN_REPETITION_PENALTY = float(os.getenv("GEN_REPETITION_PENALTY", "1.05"))
 
 SYSTEM_PROMPT = """
 You are FahMai Enterprise Data Agent.
@@ -467,11 +476,24 @@ def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
         tokenize=False,
         add_generation_prompt=True,
     )
-    x = tok(text, return_tensors="pt", truncation=True, max_length=7000).to("cuda")
+    x = tok(text, return_tensors="pt", truncation=True, max_length=GEN_MAX_INPUT_TOKENS).to("cuda")
     input_len = int(x["input_ids"].shape[-1])
+    gen_kwargs = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": GEN_DO_SAMPLE,
+        "repetition_penalty": GEN_REPETITION_PENALTY,
+    }
+    if GEN_DO_SAMPLE:
+        gen_kwargs.update(
+            {
+                "temperature": GEN_TEMPERATURE,
+                "top_p": GEN_TOP_P,
+                "top_k": GEN_TOP_K,
+            }
+        )
     t0 = time.time()
     with torch.inference_mode():
-        y = model.generate(**x, max_new_tokens=max_new_tokens, do_sample=False)
+        y = model.generate(**x, **gen_kwargs)
     sec = time.time() - t0
     completion = int(y.shape[-1]) - input_len
     ans = tok.decode(y[0][input_len:], skip_special_tokens=True).strip()
@@ -485,6 +507,11 @@ def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
             "seconds": round(sec, 3),
             "prompt_chars": len(prompt),
             "answer_chars": len(ans),
+            "do_sample": GEN_DO_SAMPLE,
+            "temperature": GEN_TEMPERATURE if GEN_DO_SAMPLE else None,
+            "top_p": GEN_TOP_P if GEN_DO_SAMPLE else None,
+            "top_k": GEN_TOP_K if GEN_DO_SAMPLE else None,
+            "repetition_penalty": GEN_REPETITION_PENALTY,
         }
     )
     return sanitize_answer(ans)
@@ -1227,14 +1254,14 @@ def hard_sql_answer(sqltool, qid, q, docs, schemas):
 
 
 def answer_one(sqltool, retriever, qdrant_retriever, tok, model, qid, q):
-    docs = retriever.search(q, 8)
-    schemas = sqltool.schema_search(q, 10)
+    docs = retriever.search(q, DOC_TOP_K)
+    schemas = sqltool.schema_search(q, SCHEMA_TOP_K)
 
     ans, obs = hard_sql_answer(sqltool, qid, q, docs, schemas)
     if ans:
         return sanitize_answer(ans), obs
 
-    qdrant_docs = qdrant_retriever.search(q, 8) if qdrant_retriever else []
+    qdrant_docs = qdrant_retriever.search(q, QDRANT_TOP_K) if qdrant_retriever else []
 
     prompt = f"""
 FINAL_ANSWER_MODE: OBSERVATIONS already include retrieved schema and document evidence. Do not output tool-call JSON.
