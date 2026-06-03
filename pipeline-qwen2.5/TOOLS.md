@@ -93,7 +93,7 @@ Purpose:
 
 Use when:
 - Back-test API needs high score and usable cache-miss behavior.
-- You need `/agent/local` and `/agent/thailm` endpoints with audit logging.
+- You need `/agent/local` and `/agent/thaillm` endpoints with audit logging.
 
 Notes:
 - It delegates to `run_production_api.sh`.
@@ -166,7 +166,7 @@ Current endpoints:
 - `POST /api/v1/chat`
 - `POST /api/v2/chat`
 - `POST /agent/local`
-- `POST /agent/thailm`
+- `POST /agent/thaillm`
 - `GET /health`
 
 Use when:
@@ -184,7 +184,7 @@ Purpose:
 
 Use when:
 - You want one command to open the current best local API.
-- You need `/agent/local`, `/agent/thailm`, `/api/v1/chat`, and `/api/v2/chat`.
+- You need `/agent/local`, `/agent/thaillm`, `/api/v1/chat`, and `/api/v2/chat`.
 
 ## Internal Pipeline Tools
 
@@ -487,7 +487,7 @@ Use when:
 - Internal testing.
 - Qdrant-enabled API checks.
 
-### `/agent/local` and `/agent/thailm`
+### `/agent/local` and `/agent/thaillm`
 
 Request:
 
