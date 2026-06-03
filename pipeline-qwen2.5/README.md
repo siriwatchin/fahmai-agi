@@ -101,6 +101,8 @@ export QDRANT_COLLECTION="fahmai_rag_bge"
 export EMBED_MODEL="$HOME/bank500/qwen35/models/bge-m3"
 export API_OUTPUT_DIR="$HOME/bank500"
 export API_PORT="8888"
+export ENABLE_API_CACHE="1"
+export API_PRELOAD_ANSWERS="1"
 
 pip install -U fastapi "uvicorn[standard]"
 
@@ -120,6 +122,10 @@ curl -s -X POST http://127.0.0.1:8888/api/v2/chat \
   -H "Content-Type: application/json" \
   -d '{"data":{"question":"วันนี้วันอะไร"}}'
 ```
+
+For load tests, pre-run the 100-question batch once, then keep `ENABLE_API_CACHE=1`.
+The API preloads the newest `$WORK_ROOT/output/<RUN_ID>/best_results.csv` so repeated
+questions return from memory instead of hitting Qwen/GPU.
 
 API contract:
 

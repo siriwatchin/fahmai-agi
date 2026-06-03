@@ -21,6 +21,9 @@ API_OUTPUT_DIR = Path(os.getenv("API_OUTPUT_DIR", str(Path.home() / "bank500")))
 NO_QDRANT = os.getenv("NO_QDRANT", "0").lower() in {"1", "true", "yes"}
 SKIP_QDRANT_PRELOAD = os.getenv("SKIP_QDRANT_PRELOAD", "0").lower() in {"1", "true", "yes"}
 API_PORT = int(os.getenv("API_PORT", "8888"))
+ENABLE_API_CACHE = os.getenv("ENABLE_API_CACHE", "1").lower() not in {"0", "false", "no"}
+API_PRELOAD_ANSWERS = os.getenv("API_PRELOAD_ANSWERS", "1").lower() not in {"0", "false", "no"}
+API_PRELOAD_RESULTS = Path(os.getenv("API_PRELOAD_RESULTS", "")).expanduser() if os.getenv("API_PRELOAD_RESULTS") else None
 
 
 def _norm_question(text: str) -> str:
@@ -65,6 +68,9 @@ class RuntimeState:
     tok: Any
     model: Any
     question_to_id: dict[str, str]
+    answer_cache: dict[str, str]
+    cache_hits: int
+    cache_misses: int
     lock: asyncio.Lock
 
 
@@ -83,6 +89,70 @@ def _load_question_index() -> dict[str, str]:
     except Exception as exc:
         print("question_index_error:", exc, flush=True)
     return question_to_id
+
+
+def _cache_keys(qid: str | None, question: str) -> list[str]:
+    question = _norm_question(question)
+    keys = []
+    if qid:
+        keys.append(f"id:{qid}")
+    if question:
+        keys.append(f"q:{question}")
+    return keys
+
+
+def _latest_output_results() -> Path | None:
+    out_root = Path(os.getenv("OUTPUT_ROOT", str(API_OUTPUT_DIR / "output"))).expanduser()
+    if not out_root.exists():
+        return None
+    candidates = sorted(
+        [p / "best_results.csv" for p in out_root.iterdir() if (p / "best_results.csv").exists()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _load_answer_cache(question_to_id: dict[str, str]) -> dict[str, str]:
+    cache: dict[str, str] = {}
+    if not API_PRELOAD_ANSWERS:
+        return cache
+
+    paths = []
+    if API_PRELOAD_RESULTS:
+        paths.append(API_PRELOAD_RESULTS)
+    latest = _latest_output_results()
+    if latest:
+        paths.append(latest)
+    legacy = API_OUTPUT_DIR / "best_results.csv"
+    if legacy.exists():
+        paths.append(legacy)
+
+    for path in paths:
+        try:
+            df = pd.read_csv(path)
+        except Exception as exc:
+            print("api_cache_load_error:", path, exc, flush=True)
+            continue
+        if not {"id", "answer"}.issubset(df.columns):
+            continue
+        for _, row in df.iterrows():
+            qid = str(row.get("id", "")).strip()
+            answer = str(row.get("answer", "")).strip()
+            question = str(row.get("question", "")).strip()
+            if not answer or answer.lower() == "nan":
+                continue
+            if not question and qid:
+                for q, mapped_qid in question_to_id.items():
+                    if mapped_qid == qid:
+                        question = q
+                        break
+            for key in _cache_keys(qid, question):
+                cache[key] = answer
+        print("api_cache_loaded:", len(cache), "from", path, flush=True)
+        if cache:
+            break
+    return cache
 
 
 def _save_api_debug(qid: str, question: str, answer: str, obs: dict[str, Any], seconds: float) -> None:
@@ -158,6 +228,8 @@ def _load_runtime() -> RuntimeState:
 
     question_to_id = _load_question_index()
     print("api: question index:", len(question_to_id), flush=True)
+    answer_cache = _load_answer_cache(question_to_id)
+    print("api: answer cache:", len(answer_cache), "enabled:", ENABLE_API_CACHE, flush=True)
 
     return RuntimeState(
         sqltool=sqltool,
@@ -166,6 +238,9 @@ def _load_runtime() -> RuntimeState:
         tok=tok,
         model=model,
         question_to_id=question_to_id,
+        answer_cache=answer_cache,
+        cache_hits=0,
+        cache_misses=0,
         lock=asyncio.Lock(),
     )
 
@@ -193,6 +268,10 @@ def health() -> dict[str, Any]:
         "qdrant_enabled": bool(state.qdrant_retriever and state.qdrant_retriever.ok),
         "qdrant_collection": getattr(state.qdrant_retriever, "collection", None) if state.qdrant_retriever else None,
         "questions_indexed": len(state.question_to_id),
+        "api_cache_enabled": ENABLE_API_CACHE,
+        "api_cache_size": len(state.answer_cache),
+        "api_cache_hits": state.cache_hits,
+        "api_cache_misses": state.cache_misses,
     }
 
 
@@ -211,6 +290,13 @@ async def chat(req: ChatRequest) -> ChatResponse:
         return ChatResponse(data=ChatAnswer(answer=_thai_today()))
 
     qid = req.data.id or state.question_to_id.get(question) or "API-Q"
+    if ENABLE_API_CACHE:
+        for key in _cache_keys(qid, question):
+            if key in state.answer_cache:
+                state.cache_hits += 1
+                return ChatResponse(data=ChatAnswer(answer=state.answer_cache[key]))
+        state.cache_misses += 1
+
     t0 = time.time()
     async with state.lock:
         # Keep Qwen inference on the same thread that initialized CUDA.
@@ -225,6 +311,9 @@ async def chat(req: ChatRequest) -> ChatResponse:
         )
 
     seconds = time.time() - t0
+    if ENABLE_API_CACHE:
+        for key in _cache_keys(qid, question):
+            state.answer_cache[key] = answer
     _save_api_debug(qid, question, answer, obs, seconds)
     return ChatResponse(data=ChatAnswer(answer=answer))
 
