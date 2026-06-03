@@ -162,6 +162,23 @@ For a quick smoke run:
 LIMIT=10 ./run_model_csv.sh
 ```
 
+Strict PostgreSQL run, no DuckDB fallback:
+
+```bash
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_model_csv_postgres.sh
+```
+
+If Postgres is not reachable, this script fails instead of producing a DuckDB
+result. The token summary should show:
+
+```json
+{
+  "sql_backend": "postgres"
+}
+```
+
 ## Run Source + Security Pipeline
 
 `agentic_sourced_secure.py` is a separate wrapper around the current best
