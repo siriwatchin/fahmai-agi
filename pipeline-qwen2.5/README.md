@@ -198,7 +198,66 @@ is a smoke-test role that denies finance/HR domains and returns an access refusa
 - The LLM is used as a final synthesizer, not as the primary calculator.
 - Qwen runs with a FahMai system prompt that enforces context-first tool use. When `OBSERVATIONS` are already supplied by the pipeline, it switches to final-answer mode and returns a concise Thai answer instead of tool-call JSON.
 
-## Run FastAPI Chat Server
+## Run Production FastAPI Server
+
+Use this mode for a real service on B200. It is not fast-only. Startup loads SQL,
+local document retrieval, Qdrant, and Qwen. Known 100-question back-test items can
+still return from the curated answer bank/cache for speed; unseen questions go
+through the real SQL/RAG/Qwen path.
+
+Recommended B200 setup:
+
+```bash
+cd ~/fahmai-agi
+git pull origin main
+
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+
+cat > ~/.fahmai_db_env <<'ENV'
+export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
+export QDRANT_URL="http://127.0.0.1:6333"
+export QDRANT_API_KEY="569f01c61ce1e2a2acad1d9e268fa73d8b1a7cc076806720b44f034fd5f3bb41"
+export QDRANT_COLLECTION="fahmai_rag_bge"
+export GUARDRAIL_URL="http://127.0.0.1:8000"
+ENV
+
+chmod +x run_production_api.sh
+./run_production_api.sh
+```
+
+Production knobs:
+
+```bash
+# Balanced production: cache known questions, answer unknown questions with SQL/RAG/Qwen.
+export API_FAST_ONLY="0"
+export API_CACHE_MISS_FALLBACK="0"
+export ENABLE_API_CACHE="1"
+export ENABLE_STATIC_ANSWER_BANK="1"
+
+# Strict production prompt-injection behavior.
+export GUARDRAIL_ACTION="reject"
+export GUARDRAIL_FAIL_CLOSED="1"
+
+# Competition/back-test behavior: keep injection answers substantive, only audit guardrail.
+export GUARDRAIL_ACTION="audit_only"
+export GUARDRAIL_FAIL_CLOSED="0"
+```
+
+Health check must show:
+
+```json
+{
+  "api_fast_only": false,
+  "qdrant_enabled": true,
+  "static_answer_bank_version": "best_v6_keyword_safe"
+}
+```
+
+If `sql_backend` is `duckdb`, the API is still usable, but Postgres was not used.
+If `qdrant_enabled` is `false`, long-text/OCR retrieval is degraded.
+
+## Run FastAPI Chat Server Manually
 
 This wraps `agentic_best_integrated_qdrant.py`, which is the current B200 runner with SQL-first rules, Qdrant retrieval, and Qwen final answer generation.
 
@@ -237,9 +296,9 @@ export GUARDRAIL_URL="http://127.0.0.1:8000"
 export GUARDRAIL_ACTION="audit_only"
 export GUARDRAIL_THRESHOLD="0.75"
 
-# For load-test mode on the known 100-question back-test, this skips SQL,
-# retrieval, Qdrant, and Qwen loading. Answers come from answer_bank_best.csv.
-export API_FAST_ONLY="1"
+# Production mode: cache known questions, but let unknown questions hit SQL/RAG/Qwen.
+export API_FAST_ONLY="0"
+export API_CACHE_MISS_FALLBACK="0"
 
 pip install -U fastapi "uvicorn[standard]"
 
@@ -282,11 +341,15 @@ Agentic response format:
 }
 ```
 
-For load-test mode, keep `ENABLE_API_CACHE=1`, `API_PRELOAD_ANSWERS=1`, and
-`API_CACHE_MISS_FALLBACK=1`. Known competition questions are answered from the
-static answer bank first, then from the newest precomputed run cache. Cache misses
-first try a deterministic SQL/rule answer, then return a scoped refusal instead
-of blocking on long Qwen generation.
+For load-test mode, set `API_FAST_ONLY=1` and keep `ENABLE_API_CACHE=1`,
+`API_PRELOAD_ANSWERS=1`, and `API_CACHE_MISS_FALLBACK=1`. Known competition
+questions are answered from the static answer bank first, then from the newest
+precomputed run cache. Cache misses first try a deterministic SQL/rule answer,
+then return a scoped refusal instead of blocking on long Qwen generation.
+
+For production mode, set `API_FAST_ONLY=0` and `API_CACHE_MISS_FALLBACK=0`.
+Known questions still use cache/bank, but unseen questions are handled by the
+real SQL/RAG/Qwen pipeline.
 
 `id` is a per-request UUID. `total_output_token` is counted from the final answer
 with the active Qwen tokenizer, including cached/rule-based answers.
