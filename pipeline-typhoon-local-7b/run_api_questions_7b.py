@@ -69,7 +69,9 @@ def finalize_submission_answer(item: dict[str, Any], question: str) -> tuple[str
     if status in {"error", "forbidden", "timeout", "needs_review"}:
         return refusal_from_question(question), False, f"bad_status:{status}"
     if not refs:
-        return refusal_from_question(question), False, "no_refs"
+        if status == "answered":
+            return answer, True, "accepted_no_refs_status_answered"
+        return answer, True, "accepted_no_refs_unvalidated"
     return answer, True, "accepted"
 
 

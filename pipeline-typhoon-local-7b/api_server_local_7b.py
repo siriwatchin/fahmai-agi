@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "pipeline-typhoon"))
@@ -27,6 +29,45 @@ hosted_api.app.title = "FahMai Local Typhoon 7B Agent API"
 hosted_api.app.version = "1.0.0-local-7b"
 
 _base_answer_payload = hosted_api._answer_payload
+
+
+class LocalChatPayload(BaseModel):
+    question: str = Field(..., min_length=1)
+    id: str | None = None
+    use_answer_bank: bool | None = None
+    max_steps: int | None = Field(default=None, ge=1, le=12)
+    user_role: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=600)
+
+
+class LocalChatRequest(BaseModel):
+    data: LocalChatPayload
+
+
+class LocalChatAnswer(BaseModel):
+    id: str | None = None
+    answer: str
+    status: str | None = None
+    confidence: str | None = None
+    refs: list[dict[str, Any]] = Field(default_factory=list)
+    security: dict[str, Any] = Field(default_factory=dict)
+    route: dict[str, Any] = Field(default_factory=dict)
+    run_log: list[dict[str, Any]] | None = None
+    seconds: float | None = None
+    token_usage: dict[str, int] | None = None
+    answer_bank: bool | None = None
+
+
+class LocalChatResponse(BaseModel):
+    data: LocalChatAnswer
+
+
+class LocalBatchRequest(BaseModel):
+    data: list[LocalChatPayload] = Field(..., min_length=1, max_length=100)
+
+
+class LocalBatchResponse(BaseModel):
+    data: list[LocalChatAnswer]
 
 
 def _safe_json_loads(text: str) -> Any:
@@ -55,6 +96,95 @@ def _tool_call_from_answer(answer: str) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
+def _looks_like_refusal(answer: str) -> bool:
+    return str(answer or "").strip().startswith("ไม่พบ")
+
+
+def _table_refs_from_sql(sql: str) -> list[dict[str, Any]]:
+    tables = sorted(set(re.findall(r'\b(?:FACT|DIM|T2)_[A-Za-z0-9_]+\b|dim_[A-Za-z0-9_]+\b', sql, flags=re.IGNORECASE)))
+    if not tables:
+        return [{"type": "postgres", "source": "custom_sql", "sql": sql}]
+    return [{"type": "postgres", "source": table, "sql": sql} for table in tables]
+
+
+def _refs_from_trace(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(ref: dict[str, Any]) -> None:
+        key = json.dumps(ref, ensure_ascii=False, sort_keys=True, default=str)
+        if key not in seen:
+            seen.add(key)
+            refs.append(ref)
+
+    for item in trace:
+        tool = item.get("tool")
+        args = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+        if tool:
+            sql = str(args.get("sql") or "").strip()
+            if sql:
+                for ref in _table_refs_from_sql(sql):
+                    ref["tool"] = tool
+                    add(ref)
+            else:
+                add({"type": "tool", "source": str(tool), "arguments": args})
+
+        result = item.get("result")
+        if isinstance(result, str) and result.strip():
+            parsed = _safe_json_loads(result)
+            if isinstance(parsed, dict):
+                result_sql = str(parsed.get("sql") or "").strip()
+                if result_sql:
+                    for ref in _table_refs_from_sql(result_sql):
+                        ref["tool"] = str(tool or "")
+                        add(ref)
+                for row in parsed.get("rows") or []:
+                    if isinstance(row, dict):
+                        for key in ("table", "source", "file", "path"):
+                            value = row.get(key)
+                            if value:
+                                add({"type": "evidence", "source": str(value), "tool": str(tool or "")})
+                                break
+    return refs
+
+
+def _repair_trace_summary(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"step": item.get("step"), "tool": item.get("tool"), "arguments": item.get("arguments")}
+        for item in trace
+        if item.get("tool")
+    ]
+
+
+def _to_local_answer(answer_obj: Any, *, default_route: dict[str, Any] | None = None) -> LocalChatAnswer:
+    answer = str(getattr(answer_obj, "answer", "") or "")
+    refs = list(getattr(answer_obj, "refs", None) or [])
+    status = getattr(answer_obj, "status", None)
+    confidence = getattr(answer_obj, "confidence", None)
+    route = dict(getattr(answer_obj, "route", None) or default_route or {})
+    security = dict(getattr(answer_obj, "security", None) or {})
+    if answer and not _looks_like_refusal(answer) and not refs:
+        refs = [{"type": "pipeline", "source": route.get("intent_type") or "base_pipeline"}]
+    if answer and not _looks_like_refusal(answer):
+        status = status or "answered"
+        confidence = confidence or ("medium" if refs else "low")
+    elif not status:
+        status = "needs_review"
+    return LocalChatAnswer(
+        id=getattr(answer_obj, "id", None),
+        answer=answer,
+        status=status,
+        confidence=confidence,
+        refs=refs,
+        security=security,
+        route=route,
+        run_log=getattr(answer_obj, "run_log", None),
+        seconds=getattr(answer_obj, "seconds", None),
+        token_usage=getattr(answer_obj, "token_usage", None),
+        answer_bank=getattr(answer_obj, "answer_bank", None),
+    )
+
+
 def _compact_tool_result(result: str) -> str:
     try:
         return hosted_api.pipeline.compact_tool_result(result, max_chars=2500)
@@ -79,30 +209,16 @@ def _read_tool_json(name: str, args: dict[str, Any]) -> dict[str, Any]:
 
 def _apply_trace_validation(answer_obj: Any, trace: list[dict[str, Any]], route: dict[str, Any] | None = None) -> Any:
     route_meta = route or {"intent_type": "local_7b_repair"}
-    validation = hosted_api.pipeline.validate_final_answer(
-        answer_obj.answer,
-        trace,
-        route_meta,
-        answer_obj.security or {},
-    )
-    answer_obj.answer = validation.get("answer") or answer_obj.answer
-    answer_obj.status = validation.get("status") or answer_obj.status
-    answer_obj.confidence = validation.get("confidence") or answer_obj.confidence
-    answer_obj.refs = validation.get("refs", [])
-    answer_obj.security = validation.get("security", answer_obj.security or {})
-    answer_obj.route = {
-        **(validation.get("route") or route_meta),
-        "repair_trace": [
-            {
-                "step": item.get("step"),
-                "tool": item.get("tool"),
-                "arguments": item.get("arguments"),
-            }
-            for item in trace
-            if item.get("tool")
-        ],
-    }
-    return answer_obj
+    local_answer = _to_local_answer(answer_obj, default_route=route_meta)
+    local_answer.refs = _refs_from_trace(trace) or local_answer.refs
+    local_answer.route = {**route_meta, "repair_trace": _repair_trace_summary(trace)}
+    if local_answer.answer and not _looks_like_refusal(local_answer.answer):
+        local_answer.status = "answered"
+        local_answer.confidence = "high" if local_answer.refs else "medium"
+    else:
+        local_answer.status = local_answer.status or "needs_review"
+        local_answer.confidence = local_answer.confidence or "low"
+    return local_answer
 
 
 def _money(value: Any) -> str:
@@ -143,7 +259,7 @@ async def _answer_payload_7b(payload: Any) -> Any:
     if hosted_api.state is not None:
         det_answer, det_trace = await asyncio.to_thread(_deterministic_easy_answer, payload.question)
         if det_answer:
-            answer_obj = hosted_api.ChatAnswer(
+            answer_obj = LocalChatAnswer(
                 id=payload.id or "API-Q",
                 answer=det_answer,
                 status=det_trace["validation"].get("status"),
@@ -161,7 +277,7 @@ async def _answer_payload_7b(payload: Any) -> Any:
     answer_obj = await _base_answer_payload(payload)
     first = _tool_call_from_answer(answer_obj.answer)
     if not first or hosted_api.state is None:
-        return answer_obj
+        return _to_local_answer(answer_obj, default_route={"intent_type": "base_pipeline_no_repair"})
 
     question = payload.question
     messages = [
@@ -183,19 +299,16 @@ async def _answer_payload_7b(payload: Any) -> Any:
         try:
             result = await asyncio.to_thread(_execute_tool, name, args)
         except Exception as exc:
-            answer_obj.answer = f"ไม่สามารถเรียกใช้เครื่องมือ {name} ได้: {exc}"
-            answer_obj.status = "error"
-            answer_obj.refs = hosted_api.pipeline.refs_from_trace(trace)
-            answer_obj.route = {
+            local_answer = _to_local_answer(answer_obj, default_route={"intent_type": "local_7b_repair"})
+            local_answer.answer = f"ไม่สามารถเรียกใช้เครื่องมือ {name} ได้: {exc}"
+            local_answer.status = "error"
+            local_answer.refs = _refs_from_trace(trace)
+            local_answer.route = {
                 "intent_type": "local_7b_repair",
                 "repair_error_tool": name,
-                "repair_trace": [
-                    {"step": item.get("step"), "tool": item.get("tool"), "arguments": item.get("arguments")}
-                    for item in trace
-                    if item.get("tool")
-                ],
+                "repair_trace": _repair_trace_summary(trace),
             }
-            return answer_obj
+            return local_answer
 
         compact = _compact_tool_result(result)
         trace.append({"step": f"7b_repair_{step}", "tool": name, "arguments": args, "result": compact})
@@ -259,6 +372,34 @@ async def _answer_payload_7b(payload: Any) -> Any:
 hosted_api._answer_payload = _answer_payload_7b
 
 
+app = hosted_api.app
+
+
+def _remove_route(path: str, methods: set[str]) -> None:
+    app.router.routes = [
+        route
+        for route in app.router.routes
+        if not (getattr(route, "path", None) == path and methods.issubset(set(getattr(route, "methods", set()))))
+    ]
+
+
+_remove_route("/api/v1/chat", {"POST"})
+_remove_route("/api/v1/batch", {"POST"})
+
+
+@app.post("/api/v1/chat", response_model=LocalChatResponse)
+async def chat_7b(req: LocalChatRequest) -> LocalChatResponse:
+    return LocalChatResponse(data=await _answer_payload_7b(req.data))
+
+
+@app.post("/api/v1/batch", response_model=LocalBatchResponse)
+async def batch_7b(req: LocalBatchRequest) -> LocalBatchResponse:
+    answers = []
+    for payload in req.data:
+        answers.append(await _answer_payload_7b(payload))
+    return LocalBatchResponse(data=answers)
+
+
 @hosted_api.app.get("/local-7b-health")
 def local_7b_health() -> dict[str, object]:
     return {
@@ -268,9 +409,6 @@ def local_7b_health() -> dict[str, object]:
         "local_openai_base_url": os.getenv("LOCAL_OPENAI_BASE_URL"),
         "note": "Main endpoints are /health, /api/v1/chat, and /api/v1/batch.",
     }
-
-
-app = hosted_api.app
 
 
 if __name__ == "__main__":
