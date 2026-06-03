@@ -34,6 +34,7 @@ API_DEBUG_INCLUDE_OBSERVATION = os.getenv("API_DEBUG_INCLUDE_OBSERVATION", "1").
 API_DEBUG_INCLUDE_RAW_OBSERVATION = os.getenv("API_DEBUG_INCLUDE_RAW_OBSERVATION", "0").lower() in {"1", "true", "yes"}
 API_DEBUG_STRING_LIMIT = int(os.getenv("API_DEBUG_STRING_LIMIT", "2000"))
 API_DEBUG_LIST_LIMIT = int(os.getenv("API_DEBUG_LIST_LIMIT", "80"))
+API_V2_DEBUG_RESPONSE = os.getenv("API_V2_DEBUG_RESPONSE", "0").lower() in {"1", "true", "yes"}
 GUARDRAIL_URL = os.getenv("GUARDRAIL_URL", "").rstrip("/")
 GUARDRAIL_ENDPOINT = os.getenv("GUARDRAIL_ENDPOINT", "").rstrip("/")
 GUARDRAIL_PATH = os.getenv("GUARDRAIL_PATH", "/predict")
@@ -194,6 +195,17 @@ class AgentDebugResponse(BaseModel):
     tool_summary: dict[str, Any]
     runtime: dict[str, Any]
     observation: dict[str, Any] | None = None
+
+
+def _extract_request_question(payload: dict[str, Any]) -> tuple[str, str | None]:
+    data = payload.get("data")
+    if isinstance(data, dict):
+        question = data.get("question") or data.get("text") or ""
+        qid = data.get("id")
+        return _norm_question(str(question)), str(qid).strip() if qid not in {None, ""} else None
+    question = payload.get("question") or payload.get("text") or ""
+    qid = payload.get("id")
+    return _norm_question(str(question)), str(qid).strip() if qid not in {None, ""} else None
 
 
 @dataclass
@@ -568,6 +580,7 @@ def _runtime_debug() -> dict[str, Any]:
         "static_answer_bank_version": pipeline.ANSWER_BANK_VERSION,
         "api_cache_enabled": ENABLE_API_CACHE,
         "api_include_sources": API_INCLUDE_SOURCES,
+        "api_v2_debug_response": API_V2_DEBUG_RESPONSE,
         "debug_include_observation": API_DEBUG_INCLUDE_OBSERVATION,
         "debug_include_raw_observation": API_DEBUG_INCLUDE_RAW_OBSERVATION,
         "guardrail_enabled": _guardrail_enabled(),
@@ -766,6 +779,7 @@ def health() -> dict[str, Any]:
         "api_cache_misses": state.cache_misses,
         "api_cache_miss_fallback": API_CACHE_MISS_FALLBACK,
         "api_fast_only": API_FAST_ONLY,
+        "api_v2_debug_response": API_V2_DEBUG_RESPONSE,
         "static_answer_bank_enabled": pipeline.ENABLE_STATIC_ANSWER_BANK,
         "static_answer_bank_path": str(pipeline.ANSWER_BANK_PATH),
         "static_answer_bank_version": pipeline.ANSWER_BANK_VERSION,
@@ -782,10 +796,31 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
-@app.post("/api/v2/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, request: Request) -> ChatResponse:
+async def chat_v1(req: ChatRequest, request: Request) -> ChatResponse:
     bundle = await _answer_request(_norm_question(req.data.question), req.data.id, route=request.url.path)
     return ChatResponse(data=ChatAnswer(answer=bundle.answer))
+
+
+@app.post("/api/v2/chat")
+async def chat_v2(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid JSON body: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+
+    question, explicit_id = _extract_request_question(payload)
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+
+    if API_V2_DEBUG_RESPONSE:
+        snapshot = _audit_snapshot()
+        bundle = await _answer_request(question, explicit_id, route=request.url.path)
+        return _make_debug_payload(bundle, snapshot)
+
+    bundle = await _answer_request(question, explicit_id, route=request.url.path)
+    return {"data": {"answer": bundle.answer}}
 
 
 @app.post("/agent/local", response_model=AgentResponse, response_model_exclude_none=True)

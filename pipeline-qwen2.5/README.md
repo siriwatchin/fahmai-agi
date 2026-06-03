@@ -207,7 +207,7 @@ If you are not in the pipeline folder, run it by absolute path:
 Debug endpoint:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8888/agent/local/debug \
+curl -s -X POST http://127.0.0.1:8888/api/v2/chat \
   -H "Content-Type: application/json" \
   -d '{"question":"MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ"}' \
   | python -m json.tool > debug_one_question.json
@@ -217,9 +217,19 @@ If `python -m json.tool` says `Expecting value`, inspect the raw HTTP response
 first:
 
 ```bash
-curl -i -X POST http://127.0.0.1:8888/agent/local/debug \
+curl -i -X POST http://127.0.0.1:8888/api/v2/chat \
   -H "Content-Type: application/json" \
   -d '{"question":"MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ"}'
+```
+
+`/api/v2/chat` also accepts the older wrapped body:
+
+```json
+{
+  "data": {
+    "question": "..."
+  }
+}
 ```
 
 Response fields:
@@ -228,7 +238,7 @@ Response fields:
 {
   "id": "request uuid",
   "qid": "question id if known",
-  "route": "/agent/local/debug",
+  "route": "/api/v2/chat",
   "question": "...",
   "answer": "...",
   "total_output_token": 12,
@@ -247,6 +257,8 @@ Response fields:
 
 Notes:
 
+- In `run_real_model_debug_api.sh`, `/api/v2/chat` returns the full debug payload.
+- In normal API profiles, `/api/v2/chat` keeps the simple `{ "data": { "answer": "..." } }` chat response.
 - `/agent/local` and `/agent/thaillm` stay compatible with the back-test spec:
   `id`, `answer`, `total_output_token`.
 - `/agent/local/debug` and `/agent/thaillm/debug` are for internal inspection.

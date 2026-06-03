@@ -7,6 +7,7 @@ set -euo pipefail
 # redacted observations.
 #
 # Main debug endpoints:
+#   POST /api/v2/chat
 #   POST /agent/local/debug
 #   POST /agent/thaillm/debug
 #
@@ -47,6 +48,7 @@ export API_CACHE_MISS_FALLBACK="0"
 export API_FAST_ONLY="0"
 
 export API_INCLUDE_SOURCES="1"
+export API_V2_DEBUG_RESPONSE="1"
 export API_DEBUG_INCLUDE_OBSERVATION="${API_DEBUG_INCLUDE_OBSERVATION:-1}"
 export API_DEBUG_INCLUDE_RAW_OBSERVATION="${API_DEBUG_INCLUDE_RAW_OBSERVATION:-0}"
 export API_DEBUG_STRING_LIMIT="${API_DEBUG_STRING_LIMIT:-2000}"
@@ -77,6 +79,7 @@ echo "  model_path: $MODEL_PATH"
 echo "  static_answer_bank: disabled"
 echo "  api_cache: disabled"
 echo "  debug_sources: $API_INCLUDE_SOURCES"
+echo "  api_v2_debug_response: $API_V2_DEBUG_RESPONSE"
 echo "  debug_observation: $API_DEBUG_INCLUDE_OBSERVATION"
 echo "  guardrail_endpoint: ${GUARDRAIL_ENDPOINT:-disabled}"
 echo "  guardrail_action: $GUARDRAIL_ACTION"
