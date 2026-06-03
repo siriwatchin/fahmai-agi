@@ -48,6 +48,7 @@ export GEN_DO_SAMPLE="${GEN_DO_SAMPLE:-0}"
 export GEN_MAX_INPUT_TOKENS="${GEN_MAX_INPUT_TOKENS:-8500}"
 export FINAL_MAX_NEW_TOKENS="${FINAL_MAX_NEW_TOKENS:-260}"
 export GEN_REPETITION_PENALTY="${GEN_REPETITION_PENALTY:-1.03}"
+export SANITIZE_MAX_CHARS="${SANITIZE_MAX_CHARS:-2000}"
 export DOC_TOP_K="${DOC_TOP_K:-10}"
 export QDRANT_TOP_K="${QDRANT_TOP_K:-10}"
 export SCHEMA_TOP_K="${SCHEMA_TOP_K:-12}"
@@ -69,6 +70,7 @@ echo "  model_rewrite_rule_answers: $MODEL_REWRITE_RULE_ANSWERS"
 echo "  model_rewrite_entity_guard: $MODEL_REWRITE_ENTITY_GUARD"
 echo "  final_answer_security_guard: $FINAL_ANSWER_SECURITY_GUARD"
 echo "  final_max_new_tokens: $FINAL_MAX_NEW_TOKENS"
+echo "  sanitize_max_chars: $SANITIZE_MAX_CHARS"
 
 args=(--limit "$LIMIT")
 if [ "$NO_QDRANT" = "1" ]; then

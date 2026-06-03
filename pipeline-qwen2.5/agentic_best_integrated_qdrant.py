@@ -47,6 +47,7 @@ GEN_TOP_P = float(os.getenv("GEN_TOP_P", "0.8"))
 GEN_TOP_K = int(os.getenv("GEN_TOP_K", "20"))
 GEN_REPETITION_PENALTY = float(os.getenv("GEN_REPETITION_PENALTY", "1.05"))
 FINAL_MAX_NEW_TOKENS = int(os.getenv("FINAL_MAX_NEW_TOKENS", "180"))
+SANITIZE_MAX_CHARS = int(os.getenv("SANITIZE_MAX_CHARS", "2000"))
 RUN_ID = os.getenv("RUN_ID", time.strftime("%Y%m%d_%H%M%S"))
 OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", str(WORK / "output"))).expanduser()
 RUN_OUTPUT_DIR = Path(os.getenv("RUN_OUTPUT_DIR", str(OUTPUT_ROOT / RUN_ID))).expanduser()
@@ -203,7 +204,7 @@ def sanitize_answer(s):
             s = s.split(marker)[0].strip()
     s = re.sub(r"(?i)^assistant\s*", "", s).strip()
     s = re.sub(r"(?s)<think>.*?</think>", "", s).strip()
-    return s[:600]
+    return s[:SANITIZE_MAX_CHARS]
 
 
 CRITICAL_ENTITY_RE = re.compile(
@@ -2386,6 +2387,7 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUT
         "schema_top_k": SCHEMA_TOP_K,
         "gen_max_input_tokens": GEN_MAX_INPUT_TOKENS,
         "final_max_new_tokens": FINAL_MAX_NEW_TOKENS,
+        "sanitize_max_chars": SANITIZE_MAX_CHARS,
         "gen_do_sample": GEN_DO_SAMPLE,
         "gen_temperature": GEN_TEMPERATURE if GEN_DO_SAMPLE else None,
         "gen_top_p": GEN_TOP_P if GEN_DO_SAMPLE else None,

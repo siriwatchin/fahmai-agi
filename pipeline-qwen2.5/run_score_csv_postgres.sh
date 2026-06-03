@@ -27,7 +27,8 @@ export EMBED_MODEL="${EMBED_MODEL:-$HOME/bank500/qwen35/models/bge-m3}"
 export ENABLE_STATIC_ANSWER_BANK="1"
 export ANSWER_BANK_FAST_ONLY="1"
 export ANSWER_BANK_PATH="${ANSWER_BANK_PATH:-$(pwd)/fahmai_qwen25/answer_bank_best.csv}"
-export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-best_v7_compact_keywords}"
+export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-best_v8_ref_inj9_safe}"
+export SANITIZE_MAX_CHARS="${SANITIZE_MAX_CHARS:-2000}"
 export SKIP_QDRANT_PRELOAD="1"
 
 exec ./run_model_csv.sh
