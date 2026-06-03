@@ -136,6 +136,51 @@ source ~/venvs/qwen35/bin/activate
 `run_score_csv_public089.sh` uses `fahmai_qwen25/answer_bank_peterperjer_0_89.csv`.
 This is currently the strongest known public-score static profile.
 
+## Real Model CSV Run With Logs
+
+Use this when you want to inspect the real Qwen path instead of submitting the
+static public-score profile. This disables the static answer bank and routes all
+questions through SQL/schema tools, TF-IDF/Qdrant retrieval, and Qwen generation.
+
+```bash
+cd ~/fahmai-agi
+git pull origin main
+
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_real_model_csv.sh
+```
+
+Output is written to:
+
+```text
+$WORK_ROOT/output/<RUN_ID>_real_model/
+  run.log
+  best_submission.csv
+  best_results.csv
+  best_debug.json
+  best_token_usage.csv
+  best_token_summary.json
+  best_llm_audit.jsonl
+  best_tool_audit.jsonl
+  best_tool_summary.json
+```
+
+Default SQL backend is DuckDB because it is always available from the local data
+lake. If B200 local Postgres is running, use:
+
+```bash
+SQL_BACKEND=postgres \
+PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai" \
+./run_real_model_csv.sh
+```
+
+To tail the log from another terminal:
+
+```bash
+tail -f ~/bank500/output/*_real_model/run.log
+```
+
 ## Methodology Profile: High Score + Usable Fallback
 
 Use this profile when you want the most practical balance:
