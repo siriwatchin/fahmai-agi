@@ -7,7 +7,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-if [ -f "$HOME/.fahmai_db_env" ]; then
+export SOURCE_FAHMAI_DB_ENV="${SOURCE_FAHMAI_DB_ENV:-1}"
+
+if [ "$SOURCE_FAHMAI_DB_ENV" = "1" ] && [ -f "$HOME/.fahmai_db_env" ]; then
   # shellcheck disable=SC1090
   source "$HOME/.fahmai_db_env"
 fi
