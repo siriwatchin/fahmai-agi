@@ -1257,6 +1257,13 @@ def hard_sql_answer(sqltool, qid, q, docs, schemas):
 
 
 def answer_one(sqltool, retriever, qdrant_retriever, tok, model, qid, q):
+    # Fast path: many EASY/MED questions are deterministic SQL/table lookups.
+    # Avoid expensive TF-IDF/Qdrant retrieval unless the rule layer cannot answer.
+    docs, schemas = [], []
+    ans, obs = hard_sql_answer(sqltool, qid, q, docs, schemas)
+    if ans:
+        return sanitize_answer(ans), obs
+
     docs = retriever.search(q, DOC_TOP_K)
     schemas = sqltool.schema_search(q, SCHEMA_TOP_K)
 
