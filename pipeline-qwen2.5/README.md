@@ -126,6 +126,42 @@ Then configure `SQL_BACKEND`, `QDRANT_URL`, `EMBED_MODEL`, and `MODEL_PATH` as
 usual. Known ids still return from the answer bank; missing ids go through the
 SQL/RAG/Qwen path.
 
+## Model-Generated CSV
+
+Use this when you want to measure the actual B200 model pipeline instead of the
+static answer bank. This path disables the answer bank and runs the full
+SQL/RAG/Qdrant/Qwen stack, then writes:
+
+```text
+$WORK_ROOT/output/<RUN_ID>/best_submission.csv
+```
+
+Run on B200:
+
+```bash
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_model_csv.sh
+```
+
+The script defaults to:
+
+```text
+SQL_BACKEND=postgres
+PG_DSN=postgresql://admin:scamper@localhost:5432/fahmai
+QDRANT_URL=http://127.0.0.1:6333
+QDRANT_COLLECTION=fahmai_rag_bge
+MODEL_PATH=~/bank500/qwen35/models/Qwen2.5-7B-Instruct
+ENABLE_STATIC_ANSWER_BANK=0
+ANSWER_BANK_FAST_ONLY=0
+```
+
+For a quick smoke run:
+
+```bash
+LIMIT=10 ./run_model_csv.sh
+```
+
 ## Run Source + Security Pipeline
 
 `agentic_sourced_secure.py` is a separate wrapper around the current best
