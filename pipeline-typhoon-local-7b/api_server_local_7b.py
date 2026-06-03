@@ -100,6 +100,22 @@ def _looks_like_refusal(answer: str) -> bool:
     return str(answer or "").strip().startswith("ไม่พบ")
 
 
+def _looks_like_non_answer(answer: str) -> bool:
+    text = str(answer or "").strip().lower()
+    if not text:
+        return True
+    markers = [
+        "ขออภัย",
+        "โปรดระบุ",
+        "กรุณาระบุ",
+        "ไม่สามารถช่วย",
+        "i need more",
+        "please provide",
+        "could you provide",
+    ]
+    return any(marker in text for marker in markers)
+
+
 def _table_refs_from_sql(sql: str) -> list[dict[str, Any]]:
     tables = sorted(set(re.findall(r'\b(?:FACT|DIM|T2)_[A-Za-z0-9_]+\b|dim_[A-Za-z0-9_]+\b', sql, flags=re.IGNORECASE)))
     if not tables:
@@ -163,9 +179,9 @@ def _to_local_answer(answer_obj: Any, *, default_route: dict[str, Any] | None = 
     confidence = getattr(answer_obj, "confidence", None)
     route = dict(getattr(answer_obj, "route", None) or default_route or {})
     security = dict(getattr(answer_obj, "security", None) or {})
-    if answer and not _looks_like_refusal(answer) and not refs:
+    if answer and not _looks_like_refusal(answer) and not _looks_like_non_answer(answer) and not refs:
         refs = [{"type": "pipeline", "source": route.get("intent_type") or "base_pipeline"}]
-    if answer and not _looks_like_refusal(answer):
+    if answer and not _looks_like_refusal(answer) and not _looks_like_non_answer(answer):
         status = status or "answered"
         confidence = confidence or ("medium" if refs else "low")
     elif not status:
@@ -338,6 +354,35 @@ def _product_msrp_sql_candidates(sku: str) -> list[str]:
     ]
 
 
+def _is_vendor_payment_month_mismatch_question(question: str) -> bool:
+    q = str(question or "").lower()
+    required = ["fact_vendor_payment", "posting_date", "business_event_date"]
+    return all(token in q for token in required) and any(token in q for token in ["เดือน", "month", "ไม่ตรง", "mismatch"])
+
+
+def _vendor_payment_month_mismatch_sql_candidates() -> list[str]:
+    return [
+        """
+        SELECT COUNT(*) AS mismatch_count
+        FROM public."FACT_VENDOR_PAYMENT"
+        WHERE to_char(NULLIF(posting_date, '')::date, 'YYYY-MM')
+           <> to_char(NULLIF(business_event_date, '')::date, 'YYYY-MM')
+        """.strip(),
+        """
+        SELECT COUNT(*) AS mismatch_count
+        FROM FACT_VENDOR_PAYMENT
+        WHERE to_char(NULLIF(posting_date, '')::date, 'YYYY-MM')
+           <> to_char(NULLIF(business_event_date, '')::date, 'YYYY-MM')
+        """.strip(),
+        """
+        SELECT COUNT(*) AS mismatch_count
+        FROM public."FACT_VENDOR_PAYMENT"
+        WHERE date_trunc('month', posting_date::date)
+           <> date_trunc('month', business_event_date::date)
+        """.strip(),
+    ]
+
+
 def _preflight_evidence_trace(question: str) -> list[dict[str, Any]]:
     if hosted_api.state is None:
         return []
@@ -347,6 +392,11 @@ def _preflight_evidence_trace(question: str) -> list[dict[str, Any]]:
         candidates.extend(
             ("postgres_execute_readonly_sql", {"sql": sql, "limit": 1})
             for sql in _product_msrp_sql_candidates(sku)
+        )
+    if _is_vendor_payment_month_mismatch_question(question):
+        candidates.extend(
+            ("postgres_execute_readonly_sql", {"sql": sql, "limit": 1})
+            for sql in _vendor_payment_month_mismatch_sql_candidates()
         )
     candidates.extend(_domain_query_candidates(question))
     candidates.extend([
@@ -373,8 +423,12 @@ def _apply_trace_validation(answer_obj: Any, trace: list[dict[str, Any]], route:
     local_answer.refs = _refs_from_trace(trace) or local_answer.refs
     local_answer.route = {**route_meta, "repair_trace": _repair_trace_summary(trace)}
     if local_answer.answer and not _looks_like_refusal(local_answer.answer):
-        local_answer.status = "answered"
-        local_answer.confidence = "high" if local_answer.refs else "medium"
+        if _looks_like_non_answer(local_answer.answer):
+            local_answer.status = "needs_review"
+            local_answer.confidence = "low"
+        else:
+            local_answer.status = "answered"
+            local_answer.confidence = "high" if local_answer.refs else "medium"
     else:
         local_answer.status = local_answer.status or "needs_review"
         local_answer.confidence = local_answer.confidence or "low"
@@ -404,6 +458,25 @@ def _deterministic_easy_answer(question: str) -> tuple[str | None, dict[str, Any
                     "refs": [{"type": "postgres", "source": "DIM_PRODUCT", "sql": sql}],
                     "security": {},
                     "route": {"intent_type": "deterministic_7b_easy", "tool": "postgres_execute_readonly_sql"},
+                }
+                return answer, {"validation": validation, "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+            last_error = data
+        if last_error:
+            return None, {"last_error": last_error}
+    if _is_vendor_payment_month_mismatch_question(question):
+        last_error: dict[str, Any] = {}
+        for sql in _vendor_payment_month_mismatch_sql_candidates():
+            data = _read_tool_json("postgres_execute_readonly_sql", {"sql": sql, "limit": 1})
+            rows = data.get("rows") or []
+            if data.get("ok") and rows:
+                count = rows[0].get("mismatch_count")
+                answer = f"มี {count} รายการ"
+                validation = {
+                    "status": "answered",
+                    "confidence": "high",
+                    "refs": [{"type": "postgres", "source": "FACT_VENDOR_PAYMENT", "sql": sql}],
+                    "security": {},
+                    "route": {"intent_type": "deterministic_7b_vendor_payment_month_mismatch", "tool": "postgres_execute_readonly_sql"},
                 }
                 return answer, {"validation": validation, "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
             last_error = data

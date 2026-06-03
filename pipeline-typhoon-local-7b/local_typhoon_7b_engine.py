@@ -155,6 +155,7 @@ def _with_7b_tool_fewshot(messages: list[dict[str, Any]]) -> list[dict[str, Any]
         "Year/ranking examples:",
         "Top SKU by units in 2024 -> {\"name\":\"domain_top_sku_by_units\",\"arguments\":{\"year\":2024}}",
         "Most stockout SKU in 2025 -> {\"name\":\"domain_stockout_top_sku\",\"arguments\":{\"year\":2025}}",
+        "FACT_VENDOR_PAYMENT posting/business month mismatch count -> {\"name\":\"postgres_execute_readonly_sql\",\"arguments\":{\"sql\":\"SELECT COUNT(*) AS mismatch_count FROM public.\\\"FACT_VENDOR_PAYMENT\\\" WHERE to_char(NULLIF(posting_date, '')::date, 'YYYY-MM') <> to_char(NULLIF(business_event_date, '')::date, 'YYYY-MM')\",\"limit\":1}}",
         "",
         "Entity/domain examples:",
         "Current CEO -> {\"name\":\"domain_current_ceo\",\"arguments\":{\"as_of_date\":\"2025-06-01\"}}",
