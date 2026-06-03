@@ -1015,6 +1015,7 @@ def model_input_device(model):
 
 
 def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
+    audit_context = dict(TOOL_AUDIT_CONTEXT)
     text = tok.apply_chat_template(
         [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -1049,6 +1050,8 @@ def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
     TOKEN_LOG.append(
         {
             "qid": qid,
+            "request_uuid": audit_context.get("request_uuid"),
+            "route": audit_context.get("route"),
             "stage": stage,
             "prompt_tokens": input_len,
             "completion_tokens": completion,
@@ -1066,6 +1069,8 @@ def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
     audit_rec = {
         "ts": pd.Timestamp.now(tz="Asia/Bangkok").isoformat(),
         "qid": qid,
+        "request_uuid": audit_context.get("request_uuid"),
+        "route": audit_context.get("route"),
         "stage": stage,
         "model_path": str(MODEL),
         "prompt_hash": _sha1_short(prompt),

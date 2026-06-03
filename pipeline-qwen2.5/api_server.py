@@ -30,6 +30,10 @@ API_PRELOAD_RESULTS = Path(os.getenv("API_PRELOAD_RESULTS", "")).expanduser() if
 API_CACHE_MISS_FALLBACK = os.getenv("API_CACHE_MISS_FALLBACK", "0").lower() in {"1", "true", "yes"}
 API_CACHE_MISS_FALLBACK_ANSWER = os.getenv("API_CACHE_MISS_FALLBACK_ANSWER", "ไม่พบคำตอบที่ยืนยันได้ภายในเวลาที่กำหนดในชุดข้อมูล")
 API_FAST_ONLY = os.getenv("API_FAST_ONLY", "0").lower() in {"1", "true", "yes"}
+API_DEBUG_INCLUDE_OBSERVATION = os.getenv("API_DEBUG_INCLUDE_OBSERVATION", "1").lower() not in {"0", "false", "no"}
+API_DEBUG_INCLUDE_RAW_OBSERVATION = os.getenv("API_DEBUG_INCLUDE_RAW_OBSERVATION", "0").lower() in {"1", "true", "yes"}
+API_DEBUG_STRING_LIMIT = int(os.getenv("API_DEBUG_STRING_LIMIT", "2000"))
+API_DEBUG_LIST_LIMIT = int(os.getenv("API_DEBUG_LIST_LIMIT", "80"))
 GUARDRAIL_URL = os.getenv("GUARDRAIL_URL", "").rstrip("/")
 GUARDRAIL_ENDPOINT = os.getenv("GUARDRAIL_ENDPOINT", "").rstrip("/")
 GUARDRAIL_PATH = os.getenv("GUARDRAIL_PATH", "/predict")
@@ -173,6 +177,25 @@ class AgentResponse(BaseModel):
     sources: list[dict[str, Any]] | None = None
 
 
+class AgentDebugResponse(BaseModel):
+    id: str
+    qid: str
+    route: str
+    question: str
+    answer: str
+    total_output_token: int
+    request_seconds: float
+    sources: list[dict[str, Any]]
+    guardrail: dict[str, Any] | None = None
+    token_usage: dict[str, Any]
+    token_log: list[dict[str, Any]]
+    llm_audit: list[dict[str, Any]]
+    tool_audit: list[dict[str, Any]]
+    tool_summary: dict[str, Any]
+    runtime: dict[str, Any]
+    observation: dict[str, Any] | None = None
+
+
 @dataclass
 class RuntimeState:
     sqltool: Any
@@ -185,6 +208,19 @@ class RuntimeState:
     cache_hits: int
     cache_misses: int
     lock: asyncio.Lock
+
+
+@dataclass
+class AnswerBundle:
+    response: AgentResponse
+    qid: str
+    question: str
+    route: str
+    request_uuid: str
+    answer: str
+    total_output_token: int
+    request_seconds: float
+    observation: dict[str, Any]
 
 
 state: RuntimeState | None = None
@@ -402,6 +438,167 @@ def _make_agent_response(
     )
 
 
+def _make_answer_bundle(
+    qid: str,
+    question: str,
+    route: str,
+    request_uuid: str,
+    answer: str,
+    total_output_token: int,
+    obs: dict[str, Any] | None,
+    seconds: float,
+) -> AnswerBundle:
+    obs = obs or {}
+    return AnswerBundle(
+        response=_make_agent_response(request_uuid, answer, total_output_token, obs),
+        qid=qid,
+        question=question,
+        route=route,
+        request_uuid=request_uuid,
+        answer=answer,
+        total_output_token=total_output_token,
+        request_seconds=round(float(seconds), 3),
+        observation=obs,
+    )
+
+
+def _audit_snapshot() -> dict[str, int]:
+    return {
+        "token": len(getattr(pipeline, "TOKEN_LOG", [])),
+        "llm": len(getattr(pipeline, "LLM_AUDIT_LOG", [])),
+        "tool": len(getattr(pipeline, "TOOL_AUDIT_LOG", [])),
+    }
+
+
+def _records_for_request(records: list[dict[str, Any]], request_uuid: str, start: int) -> list[dict[str, Any]]:
+    recent = records[start:]
+    matched = [rec for rec in recent if rec.get("request_uuid") == request_uuid]
+    return matched if matched else recent
+
+
+def _audit_delta(snapshot: dict[str, int], request_uuid: str) -> dict[str, list[dict[str, Any]]]:
+    return {
+        "token_log": _records_for_request(getattr(pipeline, "TOKEN_LOG", []), request_uuid, snapshot.get("token", 0)),
+        "llm_audit": _records_for_request(getattr(pipeline, "LLM_AUDIT_LOG", []), request_uuid, snapshot.get("llm", 0)),
+        "tool_audit": _records_for_request(getattr(pipeline, "TOOL_AUDIT_LOG", []), request_uuid, snapshot.get("tool", 0)),
+    }
+
+
+def _token_usage(records: list[dict[str, Any]], output_tokens: int) -> dict[str, Any]:
+    by_stage: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        stage = str(rec.get("stage") or "unknown")
+        item = by_stage.setdefault(
+            stage,
+            {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "seconds": 0.0},
+        )
+        item["calls"] += 1
+        item["prompt_tokens"] += int(rec.get("prompt_tokens") or 0)
+        item["completion_tokens"] += int(rec.get("completion_tokens") or 0)
+        item["total_tokens"] += int(rec.get("total_tokens") or 0)
+        item["seconds"] = round(float(item["seconds"]) + float(rec.get("seconds") or 0), 3)
+    return {
+        "llm_calls": len(records),
+        "prompt_tokens": sum(int(rec.get("prompt_tokens") or 0) for rec in records),
+        "completion_tokens": sum(int(rec.get("completion_tokens") or 0) for rec in records),
+        "total_tokens": sum(int(rec.get("total_tokens") or 0) for rec in records),
+        "total_output_token": int(output_tokens),
+        "seconds": round(sum(float(rec.get("seconds") or 0) for rec in records), 3),
+        "by_stage": by_stage,
+    }
+
+
+def _tool_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    by_tool: dict[str, dict[str, Any]] = {}
+    by_action: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        tool = str(rec.get("tool") or "unknown")
+        action = str(rec.get("action") or "default")
+        for store, key in [(by_tool, tool), (by_action, f"{tool}:{action}")]:
+            item = store.setdefault(
+                key,
+                {
+                    "calls": 0,
+                    "ok_calls": 0,
+                    "seconds": 0.0,
+                    "input_tokens_estimate": 0,
+                    "output_tokens_estimate": 0,
+                    "total_tokens_estimate": 0,
+                },
+            )
+            item["calls"] += 1
+            item["ok_calls"] += 1 if rec.get("ok") else 0
+            item["seconds"] = round(float(item["seconds"]) + float(rec.get("seconds") or 0), 3)
+            item["input_tokens_estimate"] += int(rec.get("input_tokens_estimate") or 0)
+            item["output_tokens_estimate"] += int(rec.get("output_tokens_estimate") or 0)
+            item["total_tokens_estimate"] += int(rec.get("total_tokens_estimate") or 0)
+    return {"total_tool_calls": len(records), "by_tool": by_tool, "by_action": by_action}
+
+
+def _safe_debug_obj(obj: Any, depth: int = 0) -> Any:
+    if API_DEBUG_INCLUDE_RAW_OBSERVATION:
+        return obj
+    if depth > 8:
+        return "<max_depth>"
+    if isinstance(obj, dict):
+        return {str(k): _safe_debug_obj(v, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, list):
+        trimmed = [_safe_debug_obj(v, depth + 1) for v in obj[:API_DEBUG_LIST_LIMIT]]
+        if len(obj) > API_DEBUG_LIST_LIMIT:
+            trimmed.append({"truncated_items": len(obj) - API_DEBUG_LIST_LIMIT})
+        return trimmed
+    if isinstance(obj, tuple):
+        return [_safe_debug_obj(v, depth + 1) for v in obj[:API_DEBUG_LIST_LIMIT]]
+    if isinstance(obj, str):
+        return pipeline._redact_for_audit(obj, limit=API_DEBUG_STRING_LIMIT)
+    if isinstance(obj, (int, float, bool)) or obj is None:
+        return obj
+    return pipeline._redact_for_audit(str(obj), limit=API_DEBUG_STRING_LIMIT)
+
+
+def _runtime_debug() -> dict[str, Any]:
+    return {
+        "sql_backend": getattr(state.sqltool, "backend", None) if state and state.sqltool else None,
+        "sql_error": getattr(state.sqltool, "error", None) if state and state.sqltool else None,
+        "qdrant_enabled": bool(state and state.qdrant_retriever and state.qdrant_retriever.ok),
+        "qdrant_collection": getattr(state.qdrant_retriever, "collection", None) if state and state.qdrant_retriever else None,
+        "model_path": str(pipeline.MODEL),
+        "static_answer_bank_enabled": pipeline.ENABLE_STATIC_ANSWER_BANK,
+        "static_answer_bank_path": str(pipeline.ANSWER_BANK_PATH),
+        "static_answer_bank_version": pipeline.ANSWER_BANK_VERSION,
+        "api_cache_enabled": ENABLE_API_CACHE,
+        "api_include_sources": API_INCLUDE_SOURCES,
+        "debug_include_observation": API_DEBUG_INCLUDE_OBSERVATION,
+        "debug_include_raw_observation": API_DEBUG_INCLUDE_RAW_OBSERVATION,
+        "guardrail_enabled": _guardrail_enabled(),
+        "guardrail_endpoint": _guardrail_endpoint() or None,
+        "guardrail_action": GUARDRAIL_ACTION,
+    }
+
+
+def _make_debug_response(bundle: AnswerBundle, snapshot: dict[str, int]) -> AgentDebugResponse:
+    records = _audit_delta(snapshot, bundle.request_uuid)
+    guardrail = bundle.observation.get("guardrail") if isinstance(bundle.observation, dict) else None
+    return AgentDebugResponse(
+        id=bundle.request_uuid,
+        qid=bundle.qid,
+        route=bundle.route,
+        question=bundle.question,
+        answer=bundle.answer,
+        total_output_token=bundle.total_output_token,
+        request_seconds=bundle.request_seconds,
+        sources=_extract_sources(bundle.observation, limit=20),
+        guardrail=_safe_debug_obj(guardrail) if isinstance(guardrail, dict) else guardrail,
+        token_usage=_token_usage(records["token_log"], bundle.total_output_token),
+        token_log=_safe_debug_obj(records["token_log"]),
+        llm_audit=_safe_debug_obj(records["llm_audit"]),
+        tool_audit=_safe_debug_obj(records["tool_audit"]),
+        tool_summary=_tool_summary(records["tool_audit"]),
+        runtime=_runtime_debug(),
+        observation=_safe_debug_obj(bundle.observation) if API_DEBUG_INCLUDE_OBSERVATION else None,
+    )
+
+
 def _save_api_debug(
     qid: str,
     question: str,
@@ -583,17 +780,26 @@ def health() -> dict[str, Any]:
 @app.post("/api/v1/chat", response_model=ChatResponse)
 @app.post("/api/v2/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request) -> ChatResponse:
-    result = await _answer_request(_norm_question(req.data.question), req.data.id, route=request.url.path)
-    return ChatResponse(data=ChatAnswer(answer=result.answer))
+    bundle = await _answer_request(_norm_question(req.data.question), req.data.id, route=request.url.path)
+    return ChatResponse(data=ChatAnswer(answer=bundle.answer))
 
 
 @app.post("/agent/local", response_model=AgentResponse, response_model_exclude_none=True)
 @app.post("/agent/thaillm", response_model=AgentResponse, response_model_exclude_none=True)
 async def agent(req: AgentRequest, request: Request) -> AgentResponse:
-    return await _answer_request(_norm_question(req.question), req.id, route=request.url.path)
+    bundle = await _answer_request(_norm_question(req.question), req.id, route=request.url.path)
+    return bundle.response
 
 
-async def _answer_request(question: str, explicit_qid: str | None, route: str) -> AgentResponse:
+@app.post("/agent/local/debug", response_model=AgentDebugResponse)
+@app.post("/agent/thaillm/debug", response_model=AgentDebugResponse)
+async def agent_debug(req: AgentRequest, request: Request) -> AgentDebugResponse:
+    snapshot = _audit_snapshot()
+    bundle = await _answer_request(_norm_question(req.question), req.id, route=request.url.path)
+    return _make_debug_response(bundle, snapshot)
+
+
+async def _answer_request(question: str, explicit_qid: str | None, route: str) -> AnswerBundle:
     if state is None:
         raise HTTPException(status_code=503, detail="runtime is not ready")
 
@@ -630,7 +836,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
             route=route,
             total_output_token=total_output_token,
         )
-        return _make_agent_response(request_uuid, answer, total_output_token, obs)
+        return _make_answer_bundle(qid, question, route, request_uuid, answer, total_output_token, obs, 0.0)
 
     # Cheap health/smoke-test answer; real competition questions still use the agent pipeline.
     if _looks_like_day_question(question):
@@ -659,7 +865,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
             route=route,
             total_output_token=total_output_token,
         )
-        return _make_agent_response(request_uuid, answer, total_output_token, obs)
+        return _make_answer_bundle(qid, question, route, request_uuid, answer, total_output_token, obs, 0.0)
 
     if ENABLE_API_CACHE:
         cache_keys = _cache_keys(qid, question)
@@ -699,7 +905,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                     route=route,
                     total_output_token=total_output_token,
                 )
-                return _make_agent_response(request_uuid, answer, total_output_token, obs)
+                return _make_answer_bundle(qid, question, route, request_uuid, answer, total_output_token, obs, 0.0)
         state.cache_misses += 1
         pipeline.log_tool_call(
             "api_answer_cache",
@@ -744,7 +950,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                     route=route,
                     total_output_token=total_output_token,
                 )
-                return _make_agent_response(request_uuid, answer, total_output_token, fast_obs)
+                return _make_answer_bundle(qid, question, route, request_uuid, answer, total_output_token, fast_obs, 0.0)
 
             answer = API_CACHE_MISS_FALLBACK_ANSWER
             total_output_token = _count_output_tokens(answer)
@@ -771,7 +977,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                 route=route,
                 total_output_token=total_output_token,
             )
-            return _make_agent_response(request_uuid, answer, total_output_token, obs)
+            return _make_answer_bundle(qid, question, route, request_uuid, answer, total_output_token, obs, 0.0)
 
     t0 = time.time()
     async with state.lock:
@@ -814,7 +1020,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
         route=route,
         total_output_token=total_output_token,
     )
-    return _make_agent_response(request_uuid, answer, total_output_token, obs)
+    return _make_answer_bundle(qid, question, route, request_uuid, answer, total_output_token, obs, seconds)
 
 
 if __name__ == "__main__":

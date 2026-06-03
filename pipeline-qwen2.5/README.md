@@ -181,6 +181,66 @@ To tail the log from another terminal:
 tail -f ~/bank500/output/*_real_model/run.log
 ```
 
+## Real Model Debug API
+
+Use this when teammates need one-question-at-a-time inspection from the real
+SQL/RAG/Qdrant/Qwen path. This profile disables answer-bank/cache answers and
+returns a verbose per-request payload.
+
+Run on B200:
+
+```bash
+cd ~/fahmai-agi
+git pull origin main
+
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_real_model_debug_api.sh
+```
+
+Debug endpoint:
+
+```bash
+curl -s -X POST http://127.0.0.1:8888/agent/local/debug \
+  -H "Content-Type: application/json" \
+  -d '{"question":"MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ"}' \
+  | python -m json.tool > debug_one_question.json
+```
+
+Response fields:
+
+```json
+{
+  "id": "request uuid",
+  "qid": "question id if known",
+  "route": "/agent/local/debug",
+  "question": "...",
+  "answer": "...",
+  "total_output_token": 12,
+  "request_seconds": 3.21,
+  "sources": [],
+  "guardrail": {},
+  "token_usage": {},
+  "token_log": [],
+  "llm_audit": [],
+  "tool_audit": [],
+  "tool_summary": {},
+  "runtime": {},
+  "observation": {}
+}
+```
+
+Notes:
+
+- `/agent/local` and `/agent/thaillm` stay compatible with the back-test spec:
+  `id`, `answer`, `total_output_token`.
+- `/agent/local/debug` and `/agent/thaillm/debug` are for internal inspection.
+- `observation`, `tool_audit`, and `llm_audit` are redacted by default.
+- Set `API_DEBUG_INCLUDE_RAW_OBSERVATION=1` only for trusted internal debugging.
+- `api_requests.jsonl`, `api_llm_audit.jsonl`, `api_tool_audit.jsonl`,
+  `api_token_usage.csv`, and `api_tool_summary.json` are still written under
+  `API_OUTPUT_DIR`.
+
 ## Methodology Profile: High Score + Usable Fallback
 
 Use this profile when you want the most practical balance:
