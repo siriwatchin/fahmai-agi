@@ -1339,7 +1339,6 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUT
         "gen_repetition_penalty": GEN_REPETITION_PENALTY,
     }
     _write_run_files(out_dir, result_df, debug, token_df, summary)
-    _write_run_files(WORK, result_df, debug, token_df, summary)
     return summary
 
 
@@ -1419,8 +1418,6 @@ def main():
     print("submission:", RUN_OUTPUT_DIR / "best_submission.csv")
     print("debug:", RUN_OUTPUT_DIR / "best_debug.json")
     print("token_summary:", RUN_OUTPUT_DIR / "best_token_summary.json")
-    print("latest_results:", WORK / "best_results.csv")
-    print("latest_submission:", WORK / "best_submission.csv")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

@@ -70,7 +70,6 @@ $WORK_ROOT/output/<RUN_ID>/
   best_token_summary.json
 ```
 
-It still updates latest convenience copies at `$WORK_ROOT/best_*.csv/json`.
 Set `RUN_ID`, `OUTPUT_ROOT`, or `RUN_OUTPUT_DIR` to customize the run folder.
 
 ## Notes
