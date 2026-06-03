@@ -326,7 +326,7 @@ source ~/venvs/qwen35/bin/activate
 This sets:
 
 ```bash
-GUARDRAIL_ENDPOINT=http://swarm-manager.modelharbor.com:54132/predictv2
+GUARDRAIL_ENDPOINT=http://localhost:7777/predictv2
 GUARDRAIL_MAX_LENGTH=2048
 GUARDRAIL_THRESHOLD=0.75
 GUARDRAIL_ACTION=audit_only
@@ -788,7 +788,8 @@ Qdrant, hybrid RRF, and LLM generation when those paths are used.
 Guardrail behavior:
 
 - `GUARDRAIL_URL` unset: guardrail disabled.
-- `GUARDRAIL_ENDPOINT=http://swarm-manager.modelharbor.com:54132/predictv2`: use the shared guardrail service exactly as specified by infra. This endpoint receives only `text`, `max_length`, and `threshold`.
+- `GUARDRAIL_ENDPOINT=http://localhost:7777/predictv2`: use the local guardrail service on the B200 host. This endpoint receives only `text`, `max_length`, and `threshold`.
+- `GUARDRAIL_ENDPOINT=http://swarm-manager.modelharbor.com:54132/predictv2`: optional remote fallback if the B200 host can reach the shared guardrail service.
 - `GUARDRAIL_URL=http://127.0.0.1:8000`: use the older local guardrail shape at `$GUARDRAIL_URL/predict`, including the optional `model` field.
 - `GUARDRAIL_ACTION=audit_only`: log guardrail result but still let the FahMai agent answer. This is best for the competition because prompt-injection questions often need a defensive answer, not a hard block.
 - `GUARDRAIL_ACTION=reject` or `block`: return a refusal immediately when guardrail says `is_attack=true`. This is best for production API safety.
