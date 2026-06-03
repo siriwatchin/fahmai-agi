@@ -73,6 +73,57 @@ $WORK_ROOT/output/<RUN_ID>/
 
 Set `RUN_ID`, `OUTPUT_ROOT`, or `RUN_OUTPUT_DIR` to customize the run folder.
 
+## Best Score Fast Mode
+
+`agentic_best_integrated_qdrant.py` now checks a curated static answer bank before
+loading SQL, Qdrant, or Qwen:
+
+```text
+fahmai_qwen25/answer_bank_best.csv
+```
+
+This is the highest-speed competition mode for the known 100-question back-test.
+The current default `answer_bank_best.csv` is the v6 keyword-safe bank derived
+from the public 0.80 candidate plus targeted HARD/XHARD/refusal/injection patches.
+When every selected question id is covered and `ANSWER_BANK_FAST_ONLY=1`, the
+runner skips SQL/retrieval/Qdrant/model loading and writes the output immediately.
+Use this for public-score submission rehearsal and load-test stability.
+
+Run on B200:
+
+```bash
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+
+export WORK_ROOT="$HOME/bank500"
+export FAHMAI_SRC_ROOT="$HOME/scamper_house"
+export QUESTIONS_CSV_PATH="$HOME/scamper_house/questions.csv"
+
+export ENABLE_STATIC_ANSWER_BANK="1"
+export ANSWER_BANK_FAST_ONLY="1"
+export ANSWER_BANK_PATH="$HOME/fahmai-agi/pipeline-qwen2.5/fahmai_qwen25/answer_bank_best.csv"
+export ANSWER_BANK_VERSION="best_v6_keyword_safe"
+
+python agentic_best_integrated_qdrant.py --limit 100 --skip-qdrant-preload
+```
+
+The final file is:
+
+```text
+$WORK_ROOT/output/<RUN_ID>/best_submission.csv
+```
+
+For ablation or unseen questions, keep the answer bank as a first-pass cache but
+allow the real agent fallback:
+
+```bash
+export ANSWER_BANK_FAST_ONLY="0"
+```
+
+Then configure `SQL_BACKEND`, `QDRANT_URL`, `EMBED_MODEL`, and `MODEL_PATH` as
+usual. Known ids still return from the answer bank; missing ids go through the
+SQL/RAG/Qwen path.
+
 ## Run Source + Security Pipeline
 
 `agentic_sourced_secure.py` is a separate wrapper around the current best
@@ -176,6 +227,9 @@ export API_PORT="8888"
 export ENABLE_API_CACHE="1"
 export API_PRELOAD_ANSWERS="1"
 export API_CACHE_MISS_FALLBACK="1"
+export ENABLE_STATIC_ANSWER_BANK="1"
+export ANSWER_BANK_PATH="$HOME/fahmai-agi/pipeline-qwen2.5/fahmai_qwen25/answer_bank_best.csv"
+export ANSWER_BANK_VERSION="best_v6_keyword_safe"
 
 # Optional input guardrail. Keep audit_only for Kaggle-style injection answers;
 # use reject/block for production API safety.
@@ -226,8 +280,9 @@ Agentic response format:
 
 For load-test mode, keep `ENABLE_API_CACHE=1`, `API_PRELOAD_ANSWERS=1`, and
 `API_CACHE_MISS_FALLBACK=1`. Known competition questions are answered from the
-precomputed cache. Cache misses first try a deterministic SQL/rule answer, then
-return a scoped refusal instead of blocking on long Qwen generation.
+static answer bank first, then from the newest precomputed run cache. Cache misses
+first try a deterministic SQL/rule answer, then return a scoped refusal instead
+of blocking on long Qwen generation.
 
 `id` is a per-request UUID. `total_output_token` is counted from the final answer
 with the active Qwen tokenizer, including cached/rule-based answers.

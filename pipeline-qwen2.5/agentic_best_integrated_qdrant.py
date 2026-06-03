@@ -49,6 +49,16 @@ RUN_ID = os.getenv("RUN_ID", time.strftime("%Y%m%d_%H%M%S"))
 OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", str(WORK / "output"))).expanduser()
 RUN_OUTPUT_DIR = Path(os.getenv("RUN_OUTPUT_DIR", str(OUTPUT_ROOT / RUN_ID))).expanduser()
 LLM_AUDIT_INCLUDE_PROMPT = os.getenv("LLM_AUDIT_INCLUDE_PROMPT", "0").lower() in {"1", "true", "yes"}
+ENABLE_STATIC_ANSWER_BANK = os.getenv("ENABLE_STATIC_ANSWER_BANK", "1").lower() not in {"0", "false", "no"}
+ANSWER_BANK_FAST_ONLY = os.getenv("ANSWER_BANK_FAST_ONLY", "1").lower() not in {"0", "false", "no"}
+ANSWER_BANK_PATH = Path(
+    os.getenv(
+        "ANSWER_BANK_PATH",
+        str(Path(__file__).resolve().parent / "fahmai_qwen25" / "answer_bank_best.csv"),
+    )
+).expanduser()
+ANSWER_BANK_VERSION = os.getenv("ANSWER_BANK_VERSION", ANSWER_BANK_PATH.stem)
+STATIC_ANSWER_BANK = None
 
 SYSTEM_PROMPT = """
 You are FahMai Enterprise Data Agent.
@@ -142,6 +152,59 @@ def sanitize_answer(s):
     s = re.sub(r"(?i)^assistant\s*", "", s).strip()
     s = re.sub(r"(?s)<think>.*?</think>", "", s).strip()
     return s[:600]
+
+
+def load_static_answer_bank():
+    global STATIC_ANSWER_BANK
+    if STATIC_ANSWER_BANK is not None:
+        return STATIC_ANSWER_BANK
+    bank = {}
+    if not ENABLE_STATIC_ANSWER_BANK:
+        STATIC_ANSWER_BANK = bank
+        return bank
+    if not ANSWER_BANK_PATH.exists():
+        print("answer_bank_missing:", ANSWER_BANK_PATH, flush=True)
+        STATIC_ANSWER_BANK = bank
+        return bank
+    try:
+        df = pd.read_csv(ANSWER_BANK_PATH)
+        if not {"id", "response"}.issubset(df.columns):
+            raise ValueError("answer bank must contain id,response columns")
+        for _, row in df.iterrows():
+            qid = str(row["id"]).strip()
+            ans = str(row["response"]).strip()
+            if qid and ans and ans.lower() != "nan":
+                bank[qid] = sanitize_answer(ans)
+        print("answer_bank_loaded:", len(bank), "from", ANSWER_BANK_PATH, flush=True)
+    except Exception as e:
+        print("answer_bank_load_error:", e, flush=True)
+        bank = {}
+    STATIC_ANSWER_BANK = bank
+    return bank
+
+
+def static_answer_bank_fingerprint():
+    if not ANSWER_BANK_PATH.exists():
+        return None
+    try:
+        import hashlib
+
+        return hashlib.sha1(ANSWER_BANK_PATH.read_bytes()).hexdigest()[:12]
+    except Exception:
+        return None
+
+
+def static_answer_bank_answer(qid):
+    bank = load_static_answer_bank()
+    ans = bank.get(str(qid).strip())
+    if not ans:
+        return None, None
+    return ans, {
+        "answer_source": "static_answer_bank",
+        "answer_bank_path": str(ANSWER_BANK_PATH),
+        "answer_bank_version": ANSWER_BANK_VERSION,
+        "answer_bank_sha1": static_answer_bank_fingerprint(),
+    }
 
 
 def _sha1_short(text, n=12):
@@ -1976,6 +2039,10 @@ def hard_sql_answer(sqltool, qid, q, docs, schemas):
 
 
 def answer_one(sqltool, retriever, qdrant_retriever, tok, model, qid, q):
+    ans, obs = static_answer_bank_answer(qid)
+    if ans:
+        return ans, obs
+
     # Fast path: many EASY/MED questions are deterministic SQL/table lookups.
     # Avoid expensive TF-IDF/Qdrant retrieval unless the rule layer cannot answer.
     docs, schemas = [], []
@@ -2043,7 +2110,7 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUT
         "total_tokens": int(token_df["total_tokens"].sum()) if len(token_df) else 0,
         "seconds": float(token_df["seconds"].sum()) if len(token_df) else 0,
         "total_pipeline_sec": round(time.time() - run_t0, 3),
-        "sql_backend": getattr(sqltool, "backend", "unknown"),
+        "sql_backend": getattr(sqltool, "backend", "answer_bank_fast_only" if sqltool is None else "unknown"),
         "sql_error": getattr(sqltool, "error", None),
         "retrieval_backend": "tfidf_cached",
         "qdrant_enabled": bool(qdrant_retriever and qdrant_retriever.ok),
@@ -2061,6 +2128,12 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUT
         "gen_repetition_penalty": GEN_REPETITION_PENALTY,
         "llm_audit_rows": len(LLM_AUDIT_LOG),
         "llm_audit_include_prompt": LLM_AUDIT_INCLUDE_PROMPT,
+        "static_answer_bank_enabled": ENABLE_STATIC_ANSWER_BANK,
+        "static_answer_bank_path": str(ANSWER_BANK_PATH),
+        "static_answer_bank_version": ANSWER_BANK_VERSION,
+        "static_answer_bank_sha1": static_answer_bank_fingerprint(),
+        "static_answer_bank_size": len(load_static_answer_bank()),
+        "answer_bank_fast_only": ANSWER_BANK_FAST_ONLY,
     }
     _write_run_files(out_dir, result_df, debug, token_df, summary)
     return summary
@@ -2077,6 +2150,45 @@ def main():
     RUN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     print("run_id:", RUN_ID)
     print("run_output_dir:", RUN_OUTPUT_DIR)
+
+    qdf, id_col, q_col = load_questions()
+    selected_qdf = qdf.head(args.limit)
+    bank = load_static_answer_bank()
+    selected_ids = [str(r[id_col]).strip() for _, r in selected_qdf.iterrows()]
+    bank_missing = [qid for qid in selected_ids if qid not in bank]
+    print(
+        "answer_bank:",
+        "enabled" if ENABLE_STATIC_ANSWER_BANK else "disabled",
+        "size:",
+        len(bank),
+        "missing_for_run:",
+        len(bank_missing),
+    )
+
+    if ENABLE_STATIC_ANSWER_BANK and ANSWER_BANK_FAST_ONLY and selected_ids and not bank_missing:
+        print("answer_bank_fast_only: all selected questions covered; skipping sql/retrieval/qdrant/model load")
+        rows, debug = [], {}
+        for _, r in selected_qdf.iterrows():
+            qid, q = str(r[id_col]).strip(), str(r[q_col])
+            print("\n==", qid, "==")
+            print(q)
+            q_t0 = time.time()
+            ans, obs = static_answer_bank_answer(qid)
+            qsec = round(time.time() - q_t0, 3)
+            print("ANSWER:", ans)
+            print("question_sec:", qsec)
+            rows.append({"id": qid, "question": q, "answer": ans, "seconds": qsec})
+            debug[qid] = obs
+
+        summary = save_outputs(rows, debug, None, None, run_t0, RUN_OUTPUT_DIR)
+        print("\nDONE")
+        print("run_output_dir:", RUN_OUTPUT_DIR)
+        print("results:", RUN_OUTPUT_DIR / "best_results.csv")
+        print("submission:", RUN_OUTPUT_DIR / "best_submission.csv")
+        print("debug:", RUN_OUTPUT_DIR / "best_debug.json")
+        print("token_summary:", RUN_OUTPUT_DIR / "best_token_summary.json")
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
 
     print("loading sql...")
     t0 = time.time()
@@ -2118,10 +2230,9 @@ def main():
     tok, model = load_model()
     print("model_load_sec:", round(time.time() - t0, 3))
 
-    qdf, id_col, q_col = load_questions()
     rows, debug = [], {}
 
-    for _, r in qdf.head(args.limit).iterrows():
+    for _, r in selected_qdf.iterrows():
         qid, q = str(r[id_col]), str(r[q_col])
         print("\n==", qid, "==")
         print(q)

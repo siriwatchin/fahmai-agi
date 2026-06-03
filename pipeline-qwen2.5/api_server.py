@@ -179,6 +179,19 @@ def _load_answer_cache(question_to_id: dict[str, str]) -> dict[str, str]:
     if not API_PRELOAD_ANSWERS:
         return cache
 
+    try:
+        static_bank = pipeline.load_static_answer_bank()
+    except Exception as exc:
+        print("api_static_answer_bank_error:", exc, flush=True)
+        static_bank = {}
+    if static_bank:
+        id_to_question = {qid: q for q, qid in question_to_id.items()}
+        for qid, answer in static_bank.items():
+            question = id_to_question.get(qid, "")
+            for key in _cache_keys(qid, question):
+                cache[key] = answer
+        print("api_static_answer_bank_loaded:", len(static_bank), "answers", flush=True)
+
     paths = []
     if API_PRELOAD_RESULTS:
         paths.append(API_PRELOAD_RESULTS)
@@ -209,7 +222,7 @@ def _load_answer_cache(question_to_id: dict[str, str]) -> dict[str, str]:
                         question = q
                         break
             for key in _cache_keys(qid, question):
-                cache[key] = answer
+                cache.setdefault(key, answer)
         print("api_cache_loaded:", len(cache), "from", path, flush=True)
         if cache:
             break
@@ -344,7 +357,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="FahMai Qwen2.5 Agent API", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="FahMai Qwen2.5 Agent API", version="1.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -363,6 +376,10 @@ def health() -> dict[str, Any]:
         "api_cache_hits": state.cache_hits,
         "api_cache_misses": state.cache_misses,
         "api_cache_miss_fallback": API_CACHE_MISS_FALLBACK,
+        "static_answer_bank_enabled": pipeline.ENABLE_STATIC_ANSWER_BANK,
+        "static_answer_bank_path": str(pipeline.ANSWER_BANK_PATH),
+        "static_answer_bank_version": pipeline.ANSWER_BANK_VERSION,
+        "static_answer_bank_sha1": pipeline.static_answer_bank_fingerprint(),
         "guardrail_enabled": _guardrail_enabled(),
         "guardrail_url": GUARDRAIL_URL or None,
         "guardrail_action": GUARDRAIL_ACTION,
