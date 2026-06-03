@@ -196,6 +196,31 @@ curl -s -X POST http://127.0.0.1:8888/api/v2/chat \
   -d '{"data":{"question":"วันนี้วันอะไร"}}'
 ```
 
+Agentic back-test endpoints:
+
+```bash
+curl -s -X POST http://127.0.0.1:8888/agent/local \
+  -H "Content-Type: application/json" \
+  -d '{"question":"วันนี้วันอะไร"}'
+
+curl -s -X POST http://127.0.0.1:8888/agent/thaillm \
+  -H "Content-Type: application/json" \
+  -d '{"question":"MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ"}'
+```
+
+Agentic response format:
+
+```json
+{
+  "id": "b8b9b5f0-9f69-4ef5-89f8-b85ac0086da9",
+  "answer": "วันพุธ",
+  "total_output_token": 3
+}
+```
+
+`id` is a per-request UUID. `total_output_token` is counted from the final answer
+with the active Qwen tokenizer, including cached/rule-based answers.
+
 For load tests, pre-run the 100-question batch once, then keep `ENABLE_API_CACHE=1`.
 The API preloads the newest `$WORK_ROOT/output/<RUN_ID>/best_results.csv` so repeated
 questions return from memory instead of hitting Qwen/GPU.

@@ -7,13 +7,14 @@ import re
 import time
 import urllib.error
 import urllib.request
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import agentic_best_integrated_qdrant as pipeline
@@ -105,6 +106,17 @@ class ChatAnswer(BaseModel):
 
 class ChatResponse(BaseModel):
     data: ChatAnswer
+
+
+class AgentRequest(BaseModel):
+    question: str = Field(..., min_length=1)
+    id: str | None = None
+
+
+class AgentResponse(BaseModel):
+    id: str
+    answer: str
+    total_output_token: int
 
 
 @dataclass
@@ -202,13 +214,35 @@ def _load_answer_cache(question_to_id: dict[str, str]) -> dict[str, str]:
     return cache
 
 
-def _save_api_debug(qid: str, question: str, answer: str, obs: dict[str, Any], seconds: float) -> None:
+def _count_output_tokens(answer: str) -> int:
+    text = str(answer or "")
+    if state and state.tok:
+        try:
+            return int(len(state.tok(text, add_special_tokens=False)["input_ids"]))
+        except Exception:
+            pass
+    return int(len(re.findall(r"\S+", text)))
+
+
+def _save_api_debug(
+    qid: str,
+    question: str,
+    answer: str,
+    obs: dict[str, Any],
+    seconds: float,
+    request_uuid: str | None = None,
+    route: str | None = None,
+    total_output_token: int | None = None,
+) -> None:
     API_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     rec = {
         "ts": pd.Timestamp.now(tz="Asia/Bangkok").isoformat(),
+        "request_uuid": request_uuid,
+        "route": route,
         "id": qid,
         "question": question,
         "answer": answer,
+        "total_output_token": total_output_token,
         "seconds": round(seconds, 3),
         "sql_backend": getattr(state.sqltool, "backend", None) if state else None,
         "qdrant_enabled": bool(state and state.qdrant_retriever and state.qdrant_retriever.ok),
@@ -335,31 +369,75 @@ def health() -> dict[str, Any]:
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
 @app.post("/api/v2/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(req: ChatRequest, request: Request) -> ChatResponse:
+    result = await _answer_request(_norm_question(req.data.question), req.data.id, route=request.url.path)
+    return ChatResponse(data=ChatAnswer(answer=result.answer))
+
+
+@app.post("/agent/local", response_model=AgentResponse)
+@app.post("/agent/thaillm", response_model=AgentResponse)
+async def agent(req: AgentRequest, request: Request) -> AgentResponse:
+    return await _answer_request(_norm_question(req.question), req.id, route=request.url.path)
+
+
+async def _answer_request(question: str, explicit_qid: str | None, route: str) -> AgentResponse:
     if state is None:
         raise HTTPException(status_code=503, detail="runtime is not ready")
 
-    question = _norm_question(req.data.question)
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
 
+    request_uuid = str(uuid.uuid4())
     guardrail = _guardrail_predict(question)
+    qid = explicit_qid or state.question_to_id.get(question) or "API-Q"
     if guardrail.get("enabled") and guardrail.get("is_attack") and GUARDRAIL_ACTION in {"reject", "block"}:
-        qid = req.data.id or state.question_to_id.get(question) or "API-Q"
         answer = "ขอปฏิเสธคำสั่งที่อาจเป็น prompt injection — จะตอบจากข้อมูลในระบบเท่านั้น"
-        _save_api_debug(qid, question, answer, {"guardrail": guardrail, "blocked": True}, 0.0)
-        return ChatResponse(data=ChatAnswer(answer=answer))
+        total_output_token = _count_output_tokens(answer)
+        _save_api_debug(
+            qid,
+            question,
+            answer,
+            {"guardrail": guardrail, "blocked": True},
+            0.0,
+            request_uuid=request_uuid,
+            route=route,
+            total_output_token=total_output_token,
+        )
+        return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
 
     # Cheap health/smoke-test answer; real competition questions still use the agent pipeline.
     if _looks_like_day_question(question):
-        return ChatResponse(data=ChatAnswer(answer=_thai_today()))
+        answer = _thai_today()
+        total_output_token = _count_output_tokens(answer)
+        _save_api_debug(
+            qid,
+            question,
+            answer,
+            {"guardrail": guardrail, "smoke_test": True},
+            0.0,
+            request_uuid=request_uuid,
+            route=route,
+            total_output_token=total_output_token,
+        )
+        return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
 
-    qid = req.data.id or state.question_to_id.get(question) or "API-Q"
     if ENABLE_API_CACHE:
         for key in _cache_keys(qid, question):
             if key in state.answer_cache:
                 state.cache_hits += 1
-                return ChatResponse(data=ChatAnswer(answer=state.answer_cache[key]))
+                answer = state.answer_cache[key]
+                total_output_token = _count_output_tokens(answer)
+                _save_api_debug(
+                    qid,
+                    question,
+                    answer,
+                    {"guardrail": guardrail, "cache_hit": True},
+                    0.0,
+                    request_uuid=request_uuid,
+                    route=route,
+                    total_output_token=total_output_token,
+                )
+                return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
         state.cache_misses += 1
 
     t0 = time.time()
@@ -380,8 +458,18 @@ async def chat(req: ChatRequest) -> ChatResponse:
     if ENABLE_API_CACHE:
         for key in _cache_keys(qid, question):
             state.answer_cache[key] = answer
-    _save_api_debug(qid, question, answer, obs, seconds)
-    return ChatResponse(data=ChatAnswer(answer=answer))
+    total_output_token = _count_output_tokens(answer)
+    _save_api_debug(
+        qid,
+        question,
+        answer,
+        obs,
+        seconds,
+        request_uuid=request_uuid,
+        route=route,
+        total_output_token=total_output_token,
+    )
+    return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
 
 
 if __name__ == "__main__":

@@ -176,6 +176,8 @@ Endpoint:
 GET  /health
 POST /api/v1/chat
 POST /api/v2/chat
+POST /agent/local
+POST /agent/thaillm
 ```
 
 Request:
@@ -197,6 +199,38 @@ Response:
   }
 }
 ```
+
+Agentic back-test endpoint ตามรูปในงาน:
+
+```text
+POST /agent/local
+POST /agent/thaillm
+```
+
+Request:
+
+```json
+{
+  "question": "วันนี้วันอะไร"
+}
+```
+
+Response:
+
+```json
+{
+  "id": "uuid ต่อ request",
+  "answer": "วันพุธ",
+  "total_output_token": 3
+}
+```
+
+รายละเอียด:
+
+- `id`: UUID ใหม่ทุก request ใช้สำหรับ trace/audit
+- `answer`: คำตอบสุดท้ายจาก cache/rule/SQL/RAG/Qwen
+- `total_output_token`: นับ token ของ final answer ด้วย Qwen tokenizer แม้คำตอบมาจาก cache หรือ deterministic rule
+- `/agent/local` และ `/agent/thaillm` ใช้ runtime เดียวกันตอนนี้ ต่างกันที่ path เพื่อรองรับ back-test แยก track
 
 API ใช้ pipeline หลักเหมือน batch แต่มี answer cache สำหรับ load test:
 
@@ -227,6 +261,8 @@ API outputs:
 ~/bank500/api_token_summary.json
 ~/bank500/api_llm_audit.jsonl
 ```
+
+`api_requests.jsonl` จะมี `request_uuid`, `route`, และ `total_output_token` สำหรับ request ที่เข้าทาง `/agent/local` หรือ `/agent/thaillm`
 
 ## Guardrail API Integration
 
