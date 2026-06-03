@@ -180,6 +180,32 @@ The API profile exposes the same endpoints as `run_production_api.sh`, uses the
 0.89 known-answer cache by default, and keeps fallback enabled for questions not
 present in the cache.
 
+Guarded API with source attribution:
+
+```bash
+cd ~/fahmai-agi
+git pull origin main
+
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_guarded_source_api.sh
+```
+
+This sets:
+
+```bash
+GUARDRAIL_ENDPOINT=http://swarm-manager.modelharbor.com:54132/predictv2
+GUARDRAIL_MAX_LENGTH=2048
+GUARDRAIL_THRESHOLD=0.75
+GUARDRAIL_ACTION=audit_only
+API_INCLUDE_SOURCES=1
+```
+
+Use `GUARDRAIL_ACTION=reject ./run_guarded_source_api.sh` for stricter
+production blocking. Keep `audit_only` for Kaggle-style prompt-injection
+questions because the grader may expect a defensive business answer rather than
+an immediate hard block.
+
 Score-named copies are available under:
 
 ```text
@@ -571,6 +597,28 @@ Agentic response format:
 }
 ```
 
+If `API_INCLUDE_SOURCES=1`, `/agent/local` and `/agent/thaillm` additionally
+return a `sources` array. The chat endpoints `/api/v1/chat` and `/api/v2/chat`
+keep the original `{ "data": { "answer": "..." } }` contract.
+
+Source-enabled example:
+
+```json
+{
+  "id": "b8b9b5f0-9f69-4ef5-89f8-b85ac0086da9",
+  "answer": "MSRP ของ NT-LT-001 คือ 42,900.00 บาท",
+  "total_output_token": 7,
+  "sources": [
+    {
+      "type": "answer_cache",
+      "path": "/root/workspace/bank500/fahmai-agi/pipeline-qwen2.5/fahmai_qwen25/answer_bank_peterperjer_0_89.csv",
+      "version": "methodology_public089_api",
+      "sha1": "..."
+    }
+  ]
+}
+```
+
 For load-test mode, set `API_FAST_ONLY=1` and keep `ENABLE_API_CACHE=1`,
 `API_PRELOAD_ANSWERS=1`, and `API_CACHE_MISS_FALLBACK=1`. Known competition
 questions are answered from the static answer bank first, then from the newest
@@ -608,9 +656,12 @@ Qdrant, hybrid RRF, and LLM generation when those paths are used.
 Guardrail behavior:
 
 - `GUARDRAIL_URL` unset: guardrail disabled.
+- `GUARDRAIL_ENDPOINT=http://swarm-manager.modelharbor.com:54132/predictv2`: use the shared guardrail service exactly as specified by infra. This endpoint receives only `text`, `max_length`, and `threshold`.
+- `GUARDRAIL_URL=http://127.0.0.1:8000`: use the older local guardrail shape at `$GUARDRAIL_URL/predict`, including the optional `model` field.
 - `GUARDRAIL_ACTION=audit_only`: log guardrail result but still let the FahMai agent answer. This is best for the competition because prompt-injection questions often need a defensive answer, not a hard block.
 - `GUARDRAIL_ACTION=reject` or `block`: return a refusal immediately when guardrail says `is_attack=true`. This is best for production API safety.
 - `GUARDRAIL_FAIL_CLOSED=1`: reject when the guardrail API is unreachable. Default is fail-open.
+- `API_INCLUDE_SOURCES=1`: include source references in `/agent/local` and `/agent/thaillm`.
 
 API contract:
 

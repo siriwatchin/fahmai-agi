@@ -31,12 +31,16 @@ API_CACHE_MISS_FALLBACK = os.getenv("API_CACHE_MISS_FALLBACK", "0").lower() in {
 API_CACHE_MISS_FALLBACK_ANSWER = os.getenv("API_CACHE_MISS_FALLBACK_ANSWER", "ไม่พบคำตอบที่ยืนยันได้ภายในเวลาที่กำหนดในชุดข้อมูล")
 API_FAST_ONLY = os.getenv("API_FAST_ONLY", "0").lower() in {"1", "true", "yes"}
 GUARDRAIL_URL = os.getenv("GUARDRAIL_URL", "").rstrip("/")
+GUARDRAIL_ENDPOINT = os.getenv("GUARDRAIL_ENDPOINT", "").rstrip("/")
+GUARDRAIL_PATH = os.getenv("GUARDRAIL_PATH", "/predict")
 GUARDRAIL_MODEL = os.getenv("GUARDRAIL_MODEL", "model")
 GUARDRAIL_THRESHOLD = os.getenv("GUARDRAIL_THRESHOLD")
 GUARDRAIL_MAX_LENGTH = int(os.getenv("GUARDRAIL_MAX_LENGTH", "510"))
 GUARDRAIL_TIMEOUT_SEC = float(os.getenv("GUARDRAIL_TIMEOUT_SEC", "2.0"))
 GUARDRAIL_ACTION = os.getenv("GUARDRAIL_ACTION", "audit_only").lower()
 GUARDRAIL_FAIL_CLOSED = os.getenv("GUARDRAIL_FAIL_CLOSED", "0").lower() in {"1", "true", "yes"}
+GUARDRAIL_INCLUDE_MODEL_ENV = os.getenv("GUARDRAIL_INCLUDE_MODEL")
+API_INCLUDE_SOURCES = os.getenv("API_INCLUDE_SOURCES", "0").lower() in {"1", "true", "yes"}
 
 
 def _norm_question(text: str) -> str:
@@ -57,7 +61,23 @@ def _thai_today() -> str:
 
 
 def _guardrail_enabled() -> bool:
-    return bool(GUARDRAIL_URL)
+    return bool(GUARDRAIL_ENDPOINT or GUARDRAIL_URL)
+
+
+def _guardrail_endpoint() -> str:
+    if GUARDRAIL_ENDPOINT:
+        return GUARDRAIL_ENDPOINT
+    if not GUARDRAIL_URL:
+        return ""
+    path = GUARDRAIL_PATH if GUARDRAIL_PATH.startswith("/") else f"/{GUARDRAIL_PATH}"
+    return f"{GUARDRAIL_URL}{path}"
+
+
+def _guardrail_include_model(endpoint: str) -> bool:
+    if GUARDRAIL_INCLUDE_MODEL_ENV not in {None, ""}:
+        return GUARDRAIL_INCLUDE_MODEL_ENV.lower() in {"1", "true", "yes"}
+    # predictv2 spec accepts text/max_length/threshold and does not need model.
+    return not endpoint.rstrip("/").endswith("/predictv2")
 
 
 def _guardrail_predict(text: str) -> dict[str, Any]:
@@ -73,16 +93,18 @@ def _guardrail_predict(text: str) -> dict[str, Any]:
         )
         return {"enabled": False}
 
+    endpoint = _guardrail_endpoint()
     payload: dict[str, Any] = {
-        "model": GUARDRAIL_MODEL,
         "text": text,
         "max_length": GUARDRAIL_MAX_LENGTH,
     }
+    if _guardrail_include_model(endpoint):
+        payload["model"] = GUARDRAIL_MODEL
     if GUARDRAIL_THRESHOLD not in {None, ""}:
         payload["threshold"] = float(GUARDRAIL_THRESHOLD)
 
     req = urllib.request.Request(
-        f"{GUARDRAIL_URL}/predict",
+        endpoint,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -99,7 +121,7 @@ def _guardrail_predict(text: str) -> dict[str, Any]:
             output_obj=data,
             ok=not bool(data.get("is_attack") and GUARDRAIL_ACTION in {"reject", "block"}),
             seconds=time.time() - t0,
-            meta={"url": GUARDRAIL_URL, "threshold": payload.get("threshold")},
+            meta={"endpoint": endpoint, "threshold": payload.get("threshold")},
         )
         return data
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
@@ -117,7 +139,7 @@ def _guardrail_predict(text: str) -> dict[str, Any]:
             output_obj=data,
             ok=not GUARDRAIL_FAIL_CLOSED,
             seconds=time.time() - t0,
-            meta={"url": GUARDRAIL_URL, "error": str(exc)},
+            meta={"endpoint": endpoint, "error": str(exc)},
         )
         return data
 
@@ -148,6 +170,7 @@ class AgentResponse(BaseModel):
     id: str
     answer: str
     total_output_token: int
+    sources: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -266,6 +289,117 @@ def _count_output_tokens(answer: str) -> int:
         except Exception:
             pass
     return int(len(re.findall(r"\S+", text)))
+
+
+def _source_from_doc_hit(hit: dict[str, Any]) -> dict[str, Any] | None:
+    text = str(hit.get("text", "") or "")
+    first = text.splitlines()[0] if text else ""
+    path = hit.get("path") or hit.get("title")
+    kind = hit.get("doc_type") or "document"
+    if first.startswith("[DOC] "):
+        path = first.replace("[DOC] ", "", 1)
+        kind = "doc"
+    elif first.startswith("[CSV_SAMPLE] "):
+        path = first.replace("[CSV_SAMPLE] ", "", 1)
+        kind = "csv_sample"
+    if not path and not text:
+        return None
+    return {
+        "type": kind,
+        "path": path,
+        "score": hit.get("score") or hit.get("rrf_score"),
+        "date": hit.get("date"),
+        "preview": pipeline._redact_for_audit(text, limit=220) if text else None,
+    }
+
+
+def _extract_sources(obs: dict[str, Any] | None, limit: int = 8) -> list[dict[str, Any]]:
+    obs = obs or {}
+    sources: list[dict[str, Any]] = []
+
+    if obs.get("answer_source") == "static_answer_bank" or obs.get("cache_hit"):
+        sources.append(
+            {
+                "type": "answer_cache",
+                "path": obs.get("answer_bank_path") or str(pipeline.ANSWER_BANK_PATH),
+                "version": obs.get("answer_bank_version") or pipeline.ANSWER_BANK_VERSION,
+                "sha1": obs.get("answer_bank_sha1") or pipeline.static_answer_bank_fingerprint(),
+            }
+        )
+
+    if obs.get("sql"):
+        sources.append(
+            {
+                "type": "sql",
+                "backend": getattr(state.sqltool, "backend", None) if state else None,
+                "query_hash": pipeline._sha1_short(obs.get("sql")),
+                "preview": pipeline._redact_for_audit(obs.get("sql"), limit=260),
+            }
+        )
+
+    sql_result = obs.get("sql_result") or {}
+    if isinstance(sql_result, dict) and sql_result.get("sql") and not obs.get("sql"):
+        sources.append(
+            {
+                "type": "sql",
+                "backend": getattr(state.sqltool, "backend", None) if state else None,
+                "query_hash": pipeline._sha1_short(sql_result.get("sql")),
+                "preview": pipeline._redact_for_audit(sql_result.get("sql"), limit=260),
+            }
+        )
+
+    for key in ["evidence_pack", "qdrant_search", "document_search"]:
+        for hit in obs.get(key, []) or []:
+            if not isinstance(hit, dict):
+                continue
+            item = _source_from_doc_hit(hit)
+            if item:
+                item["source_group"] = key
+                sources.append(item)
+            if len(sources) >= limit:
+                break
+        if len(sources) >= limit:
+            break
+
+    for schema in obs.get("schema_search", []) or []:
+        if not isinstance(schema, dict):
+            continue
+        sources.append(
+            {
+                "type": "schema",
+                "table": schema.get("table"),
+                "path": schema.get("path"),
+                "columns": [c.get("column_name") for c in schema.get("columns", [])[:12] if isinstance(c, dict)],
+            }
+        )
+        if len(sources) >= limit:
+            break
+
+    deduped = []
+    seen = set()
+    for src in sources:
+        key = json.dumps(src, ensure_ascii=False, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(src)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _make_agent_response(
+    request_uuid: str,
+    answer: str,
+    total_output_token: int,
+    obs: dict[str, Any] | None = None,
+) -> AgentResponse:
+    return AgentResponse(
+        id=request_uuid,
+        answer=answer,
+        total_output_token=total_output_token,
+        sources=_extract_sources(obs) if API_INCLUDE_SOURCES else None,
+    )
 
 
 def _save_api_debug(
@@ -437,8 +571,10 @@ def health() -> dict[str, Any]:
         "static_answer_bank_sha1": pipeline.static_answer_bank_fingerprint(),
         "guardrail_enabled": _guardrail_enabled(),
         "guardrail_url": GUARDRAIL_URL or None,
+        "guardrail_endpoint": _guardrail_endpoint() or None,
         "guardrail_action": GUARDRAIL_ACTION,
         "guardrail_fail_closed": GUARDRAIL_FAIL_CLOSED,
+        "api_include_sources": API_INCLUDE_SOURCES,
         "llm_audit_rows": len(getattr(pipeline, "LLM_AUDIT_LOG", [])),
         "tool_audit_rows": len(getattr(pipeline, "TOOL_AUDIT_LOG", [])),
     }
@@ -451,8 +587,8 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     return ChatResponse(data=ChatAnswer(answer=result.answer))
 
 
-@app.post("/agent/local", response_model=AgentResponse)
-@app.post("/agent/thaillm", response_model=AgentResponse)
+@app.post("/agent/local", response_model=AgentResponse, response_model_exclude_none=True)
+@app.post("/agent/thaillm", response_model=AgentResponse, response_model_exclude_none=True)
 async def agent(req: AgentRequest, request: Request) -> AgentResponse:
     return await _answer_request(_norm_question(req.question), req.id, route=request.url.path)
 
@@ -483,17 +619,18 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
             seconds=0,
             output_tokens=total_output_token,
         )
+        obs = {"guardrail": guardrail, "blocked": True}
         _save_api_debug(
             qid,
             question,
             answer,
-            {"guardrail": guardrail, "blocked": True},
+            obs,
             0.0,
             request_uuid=request_uuid,
             route=route,
             total_output_token=total_output_token,
         )
-        return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+        return _make_agent_response(request_uuid, answer, total_output_token, obs)
 
     # Cheap health/smoke-test answer; real competition questions still use the agent pipeline.
     if _looks_like_day_question(question):
@@ -511,17 +648,18 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
             seconds=0,
             output_tokens=total_output_token,
         )
+        obs = {"guardrail": guardrail, "smoke_test": True}
         _save_api_debug(
             qid,
             question,
             answer,
-            {"guardrail": guardrail, "smoke_test": True},
+            obs,
             0.0,
             request_uuid=request_uuid,
             route=route,
             total_output_token=total_output_token,
         )
-        return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+        return _make_agent_response(request_uuid, answer, total_output_token, obs)
 
     if ENABLE_API_CACHE:
         cache_keys = _cache_keys(qid, question)
@@ -543,17 +681,25 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                     output_tokens=total_output_token,
                     meta={"cache_size": len(state.answer_cache), "cache_hits": state.cache_hits},
                 )
+                obs = {
+                    "guardrail": guardrail,
+                    "cache_hit": True,
+                    "answer_source": "api_answer_cache",
+                    "answer_bank_path": str(pipeline.ANSWER_BANK_PATH),
+                    "answer_bank_version": pipeline.ANSWER_BANK_VERSION,
+                    "answer_bank_sha1": pipeline.static_answer_bank_fingerprint(),
+                }
                 _save_api_debug(
                     qid,
                     question,
                     answer,
-                    {"guardrail": guardrail, "cache_hit": True},
+                    obs,
                     0.0,
                     request_uuid=request_uuid,
                     route=route,
                     total_output_token=total_output_token,
                 )
-                return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+                return _make_agent_response(request_uuid, answer, total_output_token, obs)
         state.cache_misses += 1
         pipeline.log_tool_call(
             "api_answer_cache",
@@ -598,7 +744,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                     route=route,
                     total_output_token=total_output_token,
                 )
-                return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+                return _make_agent_response(request_uuid, answer, total_output_token, fast_obs)
 
             answer = API_CACHE_MISS_FALLBACK_ANSWER
             total_output_token = _count_output_tokens(answer)
@@ -614,17 +760,18 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                 seconds=0,
                 output_tokens=total_output_token,
             )
+            obs = {"guardrail": guardrail, "cache_miss_fallback": True}
             _save_api_debug(
                 qid,
                 question,
                 answer,
-                {"guardrail": guardrail, "cache_miss_fallback": True},
+                obs,
                 0.0,
                 request_uuid=request_uuid,
                 route=route,
                 total_output_token=total_output_token,
             )
-            return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+            return _make_agent_response(request_uuid, answer, total_output_token, obs)
 
     t0 = time.time()
     async with state.lock:
@@ -667,7 +814,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
         route=route,
         total_output_token=total_output_token,
     )
-    return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+    return _make_agent_response(request_uuid, answer, total_output_token, obs)
 
 
 if __name__ == "__main__":

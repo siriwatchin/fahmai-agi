@@ -14,6 +14,7 @@ set -euo pipefail
 #   QDRANT_URL=http://127.0.0.1:6333
 #   QDRANT_API_KEY=...
 #   GUARDRAIL_URL=http://127.0.0.1:8000
+#   or GUARDRAIL_ENDPOINT=http://swarm-manager.modelharbor.com:54132/predictv2
 
 cd "$(dirname "$0")"
 
@@ -71,6 +72,8 @@ echo "  answer_bank: $ANSWER_BANK_PATH"
 echo "  api_fast_only: $API_FAST_ONLY"
 echo "  cache_miss_fallback: $API_CACHE_MISS_FALLBACK"
 echo "  guardrail_url_set: $([ -n "${GUARDRAIL_URL:-}" ] && echo yes || echo no)"
+echo "  guardrail_endpoint_set: $([ -n "${GUARDRAIL_ENDPOINT:-}" ] && echo yes || echo no)"
 echo "  guardrail_action: $GUARDRAIL_ACTION"
+echo "  include_sources: ${API_INCLUDE_SOURCES:-0}"
 
 exec uvicorn api_server:app --host 0.0.0.0 --port "$API_PORT"
