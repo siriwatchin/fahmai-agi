@@ -39,7 +39,7 @@ export SKIP_QDRANT_PRELOAD="${SKIP_QDRANT_PRELOAD:-0}"
 
 export ENABLE_STATIC_ANSWER_BANK="${ENABLE_STATIC_ANSWER_BANK:-1}"
 export ANSWER_BANK_PATH="${ANSWER_BANK_PATH:-$PWD/fahmai_qwen25/answer_bank_best.csv}"
-export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-best_v6_keyword_safe}"
+export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-best_v7_compact_keywords}"
 
 export API_OUTPUT_DIR="${API_OUTPUT_DIR:-$WORK_ROOT}"
 export API_PORT="${API_PORT:-8888}"

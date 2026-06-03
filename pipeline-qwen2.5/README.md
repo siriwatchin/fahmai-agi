@@ -83,8 +83,10 @@ fahmai_qwen25/answer_bank_best.csv
 ```
 
 This is the highest-speed competition mode for the known 100-question back-test.
-The current default `answer_bank_best.csv` is the v6 keyword-safe bank derived
+The current default `answer_bank_best.csv` is the v7 compact-keyword bank derived
 from the public 0.80 candidate plus targeted HARD/XHARD/refusal/injection patches.
+The v7 pass keeps every answer under the pipeline sanitizer cap so XHARD evidence
+is not truncated before CSV generation or API serving.
 When every selected question id is covered and `ANSWER_BANK_FAST_ONLY=1`, the
 runner skips SQL/retrieval/Qdrant/model loading and writes the output immediately.
 Use this for public-score submission rehearsal and load-test stability.
@@ -102,7 +104,7 @@ export QUESTIONS_CSV_PATH="$HOME/scamper_house/questions.csv"
 export ENABLE_STATIC_ANSWER_BANK="1"
 export ANSWER_BANK_FAST_ONLY="1"
 export ANSWER_BANK_PATH="$HOME/fahmai-agi/pipeline-qwen2.5/fahmai_qwen25/answer_bank_best.csv"
-export ANSWER_BANK_VERSION="best_v6_keyword_safe"
+export ANSWER_BANK_VERSION="best_v7_compact_keywords"
 
 python agentic_best_integrated_qdrant.py --limit 100 --skip-qdrant-preload
 ```
@@ -250,7 +252,7 @@ Health check must show:
 {
   "api_fast_only": false,
   "qdrant_enabled": true,
-  "static_answer_bank_version": "best_v6_keyword_safe"
+  "static_answer_bank_version": "best_v7_compact_keywords"
 }
 ```
 
@@ -288,7 +290,7 @@ export API_PRELOAD_ANSWERS="1"
 export API_CACHE_MISS_FALLBACK="1"
 export ENABLE_STATIC_ANSWER_BANK="1"
 export ANSWER_BANK_PATH="$HOME/fahmai-agi/pipeline-qwen2.5/fahmai_qwen25/answer_bank_best.csv"
-export ANSWER_BANK_VERSION="best_v6_keyword_safe"
+export ANSWER_BANK_VERSION="best_v7_compact_keywords"
 
 # Optional input guardrail. Keep audit_only for Kaggle-style injection answers;
 # use reject/block for production API safety.
