@@ -360,6 +360,13 @@ def _is_vendor_payment_month_mismatch_question(question: str) -> bool:
     return all(token in q for token in required) and any(token in q for token in ["เดือน", "month", "ไม่ตรง", "mismatch"])
 
 
+def _is_shipping_vendor_share_question(question: str) -> bool:
+    q = str(question or "").lower()
+    return ("fact_shipping" in q or "ขนส่ง" in q or "shipping" in q) and "vendor" in q and any(
+        token in q for token in ["ส่วนแบ่ง", "เปอร์เซ็นต์", "percent", "share", "ทั้งหมด"]
+    )
+
+
 def _vendor_payment_month_mismatch_sql_candidates() -> list[str]:
     return [
         """
@@ -398,6 +405,8 @@ def _preflight_evidence_trace(question: str) -> list[dict[str, Any]]:
             ("postgres_execute_readonly_sql", {"sql": sql, "limit": 1})
             for sql in _vendor_payment_month_mismatch_sql_candidates()
         )
+    if _is_shipping_vendor_share_question(question):
+        candidates.append(("domain_shipping_vendor_share", {}))
     candidates.extend(_domain_query_candidates(question))
     candidates.extend([
         ("domain_evidence_pack", {"question": question, "top_k": 5}),
@@ -482,6 +491,32 @@ def _deterministic_easy_answer(question: str) -> tuple[str | None, dict[str, Any
             last_error = data
         if last_error:
             return None, {"last_error": last_error}
+    if _is_shipping_vendor_share_question(question):
+        data = _read_tool_json("domain_shipping_vendor_share", {})
+        rows = data.get("rows") or []
+        if data.get("ok") and rows:
+            parts = []
+            for row in rows:
+                vendor_name = row.get("vendor_name") or row.get("vendor_id") or "unknown"
+                vendor_id = row.get("vendor_id")
+                share = row.get("share_pct")
+                count = row.get("shipment_count")
+                label = f"{vendor_name} ({vendor_id})" if vendor_id and vendor_id != vendor_name else str(vendor_name)
+                if share is not None:
+                    parts.append(f"{label} {share}%")
+                elif count is not None:
+                    parts.append(f"{label} {count} รายการ")
+            if parts:
+                answer = "; ".join(parts)
+                validation = {
+                    "status": "answered",
+                    "confidence": "high",
+                    "refs": [{"type": "tool", "source": "domain_shipping_vendor_share", "arguments": {}}],
+                    "security": {},
+                    "route": {"intent_type": "deterministic_7b_shipping_vendor_share", "tool": "domain_shipping_vendor_share"},
+                }
+                return answer, {"validation": validation, "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+        return None, {"last_error": data}
     return None, {}
 
 
