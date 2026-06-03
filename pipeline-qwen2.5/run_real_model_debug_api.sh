@@ -29,8 +29,9 @@ export MODEL_PATH="${MODEL_PATH:-$WORK_ROOT/qwen35/models/Qwen2.5-7B-Instruct}"
 export API_PORT="${API_PORT:-8888}"
 export API_OUTPUT_DIR="${API_OUTPUT_DIR:-$WORK_ROOT}"
 
-# Use DuckDB by default so the API starts even when local Postgres is down.
-export SQL_BACKEND="${SQL_BACKEND:-duckdb}"
+# Use local PostgreSQL by default; keep fallback enabled for B200 sessions where
+# the local database is temporarily unavailable.
+export SQL_BACKEND="${SQL_BACKEND:-postgres}"
 export ALLOW_SQL_FALLBACK="${ALLOW_SQL_FALLBACK:-1}"
 export PG_DSN="${PG_DSN:-postgresql://admin:scamper@localhost:5432/fahmai}"
 export PG_SCHEMA="${PG_SCHEMA:-public}"
@@ -54,12 +55,8 @@ export API_DEBUG_INCLUDE_RAW_OBSERVATION="${API_DEBUG_INCLUDE_RAW_OBSERVATION:-0
 export API_DEBUG_STRING_LIMIT="${API_DEBUG_STRING_LIMIT:-2000}"
 export API_DEBUG_LIST_LIMIT="${API_DEBUG_LIST_LIMIT:-80}"
 
-export GUARDRAIL_ENDPOINT="${GUARDRAIL_ENDPOINT:-}"
-export GUARDRAIL_URL="${GUARDRAIL_URL:-}"
-export GUARDRAIL_MAX_LENGTH="${GUARDRAIL_MAX_LENGTH:-2048}"
-export GUARDRAIL_THRESHOLD="${GUARDRAIL_THRESHOLD:-0.75}"
-export GUARDRAIL_ACTION="${GUARDRAIL_ACTION:-audit_only}"
-export GUARDRAIL_FAIL_CLOSED="${GUARDRAIL_FAIL_CLOSED:-0}"
+unset GUARDRAIL_ENDPOINT
+unset GUARDRAIL_URL
 
 export MODEL_LOAD_STRATEGY="${MODEL_LOAD_STRATEGY:-cuda_direct}"
 export DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP="${DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP:-1}"
@@ -74,6 +71,7 @@ export SANITIZE_MAX_CHARS="${SANITIZE_MAX_CHARS:-2000}"
 echo "Starting FahMai real-model debug API"
 echo "  port: $API_PORT"
 echo "  sql_backend: $SQL_BACKEND"
+echo "  pg_dsn_set: $([ -n "${PG_DSN:-}" ] && echo yes || echo no)"
 echo "  qdrant_url: ${QDRANT_URL:-disabled}"
 echo "  qdrant_collection: ${QDRANT_COLLECTION:-}"
 echo "  model_path: $MODEL_PATH"
@@ -82,8 +80,5 @@ echo "  api_cache: disabled"
 echo "  debug_sources: $API_INCLUDE_SOURCES"
 echo "  api_v2_debug_response: $API_V2_DEBUG_RESPONSE"
 echo "  debug_observation: $API_DEBUG_INCLUDE_OBSERVATION"
-echo "  guardrail_endpoint: ${GUARDRAIL_ENDPOINT:-disabled}"
-echo "  guardrail_url: ${GUARDRAIL_URL:-disabled}"
-echo "  guardrail_action: $GUARDRAIL_ACTION"
 
 exec uvicorn api_server:app --host 0.0.0.0 --port "$API_PORT"

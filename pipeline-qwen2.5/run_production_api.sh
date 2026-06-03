@@ -13,8 +13,6 @@ set -euo pipefail
 #   PG_DSN=postgresql://admin:scamper@localhost:5432/fahmai
 #   QDRANT_URL=http://127.0.0.1:6333
 #   QDRANT_API_KEY=...
-#   GUARDRAIL_URL=http://127.0.0.1:8000
-#   or GUARDRAIL_ENDPOINT=http://localhost:7777/predictv2
 
 cd "$(dirname "$0")"
 
@@ -23,6 +21,9 @@ if [ -f "$HOME/.fahmai_db_env" ]; then
   source "$HOME/.fahmai_db_env"
 fi
 
+unset GUARDRAIL_ENDPOINT
+unset GUARDRAIL_URL
+
 export WORK_ROOT="${WORK_ROOT:-$HOME/bank500}"
 export FAHMAI_SRC_ROOT="${FAHMAI_SRC_ROOT:-$HOME/scamper_house}"
 export QUESTIONS_CSV_PATH="${QUESTIONS_CSV_PATH:-$FAHMAI_SRC_ROOT/questions.csv}"
@@ -30,6 +31,7 @@ export MODEL_PATH="${MODEL_PATH:-$WORK_ROOT/qwen35/models/Qwen2.5-7B-Instruct}"
 
 export SQL_BACKEND="${SQL_BACKEND:-postgres}"
 export ALLOW_SQL_FALLBACK="${ALLOW_SQL_FALLBACK:-1}"
+export PG_DSN="${PG_DSN:-postgresql://admin:scamper@localhost:5432/fahmai}"
 export PG_SCHEMA="${PG_SCHEMA:-public}"
 
 export QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
@@ -71,9 +73,6 @@ echo "  model_path: $MODEL_PATH"
 echo "  answer_bank: $ANSWER_BANK_PATH"
 echo "  api_fast_only: $API_FAST_ONLY"
 echo "  cache_miss_fallback: $API_CACHE_MISS_FALLBACK"
-echo "  guardrail_url_set: $([ -n "${GUARDRAIL_URL:-}" ] && echo yes || echo no)"
-echo "  guardrail_endpoint_set: $([ -n "${GUARDRAIL_ENDPOINT:-}" ] && echo yes || echo no)"
-echo "  guardrail_action: $GUARDRAIL_ACTION"
 echo "  include_sources: ${API_INCLUDE_SOURCES:-0}"
 
 exec uvicorn api_server:app --host 0.0.0.0 --port "$API_PORT"

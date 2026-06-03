@@ -37,21 +37,20 @@ embedding_dim=1024
 SQL backend ปัจจุบัน:
 
 ```text
-SQL_BACKEND=duckdb
+SQL_BACKEND=postgres
+PG_DSN=postgresql://admin:scamper@localhost:5432/fahmai
 ```
 
-เหตุผล: DuckDB โหลด public data lake จาก `~/scamper_house` ได้ครบและเร็วกว่าใน runtime นี้ ใช้เป็น safe default สำหรับ batch run และ API load-test
-
-ถ้า local Postgres บน B200 เปิดอยู่ ให้เปลี่ยนเป็น:
+เหตุผล: production/API profile ใช้ local PostgreSQL เป็น default เพื่อให้ตรงกับ database service ของทีม และเปิด `ALLOW_SQL_FALLBACK=1` เพื่อ fallback กลับ DuckDB ถ้า Postgres local ล่มชั่วคราว
 
 ```bash
 export SQL_BACKEND="postgres"
-export ALLOW_SQL_FALLBACK="0"
 export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
 export PG_SCHEMA="public"
+export ALLOW_SQL_FALLBACK="1"
 ```
 
-ถ้า Postgres ต่อไม่ได้ในวันแข่ง ให้กลับมาใช้ DuckDB ทันทีเพื่อไม่ให้ pipeline ค้างที่ startup
+ถ้า Postgres ต่อไม่ได้จริง ๆ และไม่ต้องการ fallback อัตโนมัติ ให้ค่อย override เป็น DuckDB เองเฉพาะรอบนั้น
 
 ## Pipeline หลักสำหรับคะแนน
 
@@ -90,7 +89,10 @@ source ~/venvs/qwen35/bin/activate
 export MODEL_PATH="$HOME/bank500/qwen35/models/Qwen2.5-7B-Instruct"
 export FAHMAI_SRC_ROOT="$HOME/scamper_house"
 export WORK_ROOT="$HOME/bank500"
-export SQL_BACKEND="duckdb"
+export SQL_BACKEND="postgres"
+export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
+export PG_SCHEMA="public"
+export ALLOW_SQL_FALLBACK="1"
 
 export QDRANT_URL="http://127.0.0.1:6333"
 export QDRANT_API_KEY="<qdrant-key>"
@@ -325,14 +327,7 @@ export GUARDRAIL_THRESHOLD="0.75"
 uvicorn api_server:app --host 0.0.0.0 --port 8888
 ```
 
-`GET /health` ของ FahMai API จะแสดง:
-
-```text
-guardrail_enabled
-guardrail_url
-guardrail_action
-guardrail_fail_closed
-```
+`GET /health` ของ FahMai API ไม่แสดง guardrail fields แล้วใน default spec/response body.
 
 ## Audit Log ปัจจุบัน
 
@@ -704,7 +699,10 @@ source ~/venvs/qwen35/bin/activate
 export MODEL_PATH="$HOME/bank500/qwen35/models/Qwen2.5-7B-Instruct"
 export FAHMAI_SRC_ROOT="$HOME/scamper_house"
 export WORK_ROOT="$HOME/bank500"
-export SQL_BACKEND="duckdb"
+export SQL_BACKEND="postgres"
+export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
+export PG_SCHEMA="public"
+export ALLOW_SQL_FALLBACK="1"
 
 export QDRANT_URL="http://127.0.0.1:6333"
 export QDRANT_API_KEY="<qdrant-key>"
@@ -967,7 +965,7 @@ export PG_DSN="postgresql://admin:scamper@swarm-manager.modelharbor.com:50282/fa
 export PG_SCHEMA="public"
 ```
 
-ถ้ายัง timeout ให้กลับ:
+ถ้ายัง timeout ให้ตรวจ `PG_DSN`/local Postgres ก่อน หรือ override เป็น DuckDB เฉพาะรอบฉุกเฉิน:
 
 ```bash
 export SQL_BACKEND="duckdb"

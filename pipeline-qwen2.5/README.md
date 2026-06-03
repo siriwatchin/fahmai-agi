@@ -244,7 +244,6 @@ Response fields:
   "total_output_token": 12,
   "request_seconds": 3.21,
   "sources": [],
-  "guardrail": {},
   "token_usage": {},
   "token_log": [],
   "llm_audit": [],
@@ -328,20 +327,11 @@ This now runs without an external guardrail by default:
 ```bash
 GUARDRAIL_ENDPOINT=
 GUARDRAIL_URL=
-GUARDRAIL_MAX_LENGTH=2048
-GUARDRAIL_THRESHOLD=0.75
-GUARDRAIL_ACTION=audit_only
 API_INCLUDE_SOURCES=1
 ```
 
-If an external classifier is needed later, enable it explicitly:
-
-```bash
-GUARDRAIL_ENDPOINT=http://localhost:7777/predictv2 ./run_guarded_source_api.sh
-```
-
-Keep the default disabled profile for model/CSV scoring runs so the agent can
-produce competition-valid defensive answers for prompt-injection questions.
+The default scripts unset guardrail env vars before startup. Prompt-injection
+handling is done by the agent/refusal logic, not by an external classifier.
 
 Score-named copies are available under:
 
@@ -526,7 +516,10 @@ source ~/venvs/qwen35/bin/activate
 export MODEL_PATH="$HOME/bank500/qwen35/models/Qwen2.5-7B-Instruct"
 export FAHMAI_SRC_ROOT="$HOME/scamper_house"
 export WORK_ROOT="$HOME/bank500"
-export SQL_BACKEND="duckdb"
+export SQL_BACKEND="postgres"
+export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
+export PG_SCHEMA="public"
+export ALLOW_SQL_FALLBACK="1"
 
 export QDRANT_URL="http://127.0.0.1:6333"
 export QDRANT_API_KEY="..."
@@ -660,15 +653,11 @@ source ~/venvs/qwen35/bin/activate
 
 source ~/.fahmai_db_env 2>/dev/null || true
 
-# Use duckdb to start fast from the local data lake.
-export SQL_BACKEND="duckdb"
+# Use local PostgreSQL by default.
+export SQL_BACKEND="postgres"
+export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
+export PG_SCHEMA="public"
 export ALLOW_SQL_FALLBACK="1"
-
-# If local Postgres is available on B200, switch to:
-# export SQL_BACKEND="postgres"
-# export ALLOW_SQL_FALLBACK="0"
-# export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
-# export PG_SCHEMA="public"
 
 export QDRANT_URL="http://localhost:6333"
 export QDRANT_API_KEY="..."
@@ -683,11 +672,9 @@ export ENABLE_STATIC_ANSWER_BANK="1"
 export ANSWER_BANK_PATH="$HOME/fahmai-agi/pipeline-qwen2.5/fahmai_qwen25/answer_bank_best.csv"
 export ANSWER_BANK_VERSION="best_v7_compact_keywords"
 
-# Optional input guardrail. Keep audit_only for Kaggle-style injection answers;
-# use reject/block for production API safety.
-export GUARDRAIL_URL="http://127.0.0.1:8000"
-export GUARDRAIL_ACTION="audit_only"
-export GUARDRAIL_THRESHOLD="0.75"
+# External guardrail is disabled by default.
+unset GUARDRAIL_URL
+unset GUARDRAIL_ENDPOINT
 
 # Production mode: cache known questions, but let unknown questions hit SQL/RAG/Qwen.
 export API_FAST_ONLY="0"
@@ -788,18 +775,12 @@ api_tool_summary.json
 question id, latency, estimated input/output tokens, hashes, and redacted
 previews. `api_tool_summary.json` aggregates call count, seconds, and token
 estimates per tool/action. This includes cache lookup, SQL, TF-IDF, Qdrant,
-hybrid RRF, and LLM generation when those paths are used. Guardrail calls appear
-only when an external guardrail endpoint is explicitly enabled.
+hybrid RRF, and LLM generation when those paths are used. External guardrail is
+not part of the default pipeline or API response spec.
 
-Guardrail behavior:
+Response behavior:
 
-- `GUARDRAIL_ENDPOINT` and `GUARDRAIL_URL` unset: guardrail disabled. This is the default pipeline behavior.
-- `GUARDRAIL_ENDPOINT=http://localhost:7777/predictv2`: optionally use the local guardrail service on the B200 host. This endpoint receives only `text`, `max_length`, and `threshold`.
-- `GUARDRAIL_ENDPOINT=http://swarm-manager.modelharbor.com:54132/predictv2`: optional remote fallback if the B200 host can reach the shared guardrail service.
-- `GUARDRAIL_URL=http://127.0.0.1:8000`: use the older local guardrail shape at `$GUARDRAIL_URL/predict`, including the optional `model` field.
-- `GUARDRAIL_ACTION=audit_only`: log guardrail result but still let the FahMai agent answer. This is best for the competition because prompt-injection questions often need a defensive answer, not a hard block.
-- `GUARDRAIL_ACTION=reject` or `block`: return a refusal immediately when guardrail says `is_attack=true`. This is best for production API safety.
-- `GUARDRAIL_FAIL_CLOSED=1`: reject when the guardrail API is unreachable. Default is fail-open.
+- No `guardrail` field is returned in `/api/v2/chat`, `/agent/local`, `/agent/thaillm`, or debug responses.
 - `API_INCLUDE_SOURCES=1`: include source references in `/agent/local` and `/agent/thaillm`.
 
 API contract:

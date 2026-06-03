@@ -187,7 +187,6 @@ class AgentDebugResponse(BaseModel):
     total_output_token: int
     request_seconds: float
     sources: list[dict[str, Any]]
-    guardrail: dict[str, Any] | None = None
     token_usage: dict[str, Any]
     token_log: list[dict[str, Any]]
     llm_audit: list[dict[str, Any]]
@@ -583,15 +582,11 @@ def _runtime_debug() -> dict[str, Any]:
         "api_v2_debug_response": API_V2_DEBUG_RESPONSE,
         "debug_include_observation": API_DEBUG_INCLUDE_OBSERVATION,
         "debug_include_raw_observation": API_DEBUG_INCLUDE_RAW_OBSERVATION,
-        "guardrail_enabled": _guardrail_enabled(),
-        "guardrail_endpoint": _guardrail_endpoint() or None,
-        "guardrail_action": GUARDRAIL_ACTION,
     }
 
 
 def _make_debug_payload(bundle: AnswerBundle, snapshot: dict[str, int]) -> dict[str, Any]:
     records = _audit_delta(snapshot, bundle.request_uuid)
-    guardrail = bundle.observation.get("guardrail") if isinstance(bundle.observation, dict) else None
     payload = {
         "id": bundle.request_uuid,
         "qid": bundle.qid,
@@ -601,7 +596,6 @@ def _make_debug_payload(bundle: AnswerBundle, snapshot: dict[str, int]) -> dict[
         "total_output_token": bundle.total_output_token,
         "request_seconds": bundle.request_seconds,
         "sources": _extract_sources(bundle.observation, limit=20),
-        "guardrail": _safe_debug_obj(guardrail) if isinstance(guardrail, dict) else guardrail,
         "token_usage": _token_usage(records["token_log"], bundle.total_output_token),
         "token_log": _safe_debug_obj(records["token_log"]),
         "llm_audit": _safe_debug_obj(records["llm_audit"]),
@@ -638,7 +632,6 @@ def _save_api_debug(
         "seconds": round(seconds, 3),
         "sql_backend": getattr(state.sqltool, "backend", None) if state else None,
         "qdrant_enabled": bool(state and state.qdrant_retriever and state.qdrant_retriever.ok),
-        "guardrail_enabled": _guardrail_enabled(),
         "observation": obs,
     }
     with (API_OUTPUT_DIR / "api_requests.jsonl").open("a", encoding="utf-8") as f:
@@ -663,9 +656,6 @@ def _save_api_debug(
         "sql_error": getattr(state.sqltool, "error", None) if state else None,
         "qdrant_enabled": bool(state and state.qdrant_retriever and state.qdrant_retriever.ok),
         "qdrant_collection": getattr(state.qdrant_retriever, "collection", None) if state and state.qdrant_retriever else None,
-        "guardrail_enabled": _guardrail_enabled(),
-        "guardrail_url": GUARDRAIL_URL or None,
-        "guardrail_action": GUARDRAIL_ACTION,
         "tool_audit_rows": int(len(getattr(pipeline, "TOOL_AUDIT_LOG", []))),
         "tool_summary": tool_summary,
     }
@@ -784,11 +774,6 @@ def health() -> dict[str, Any]:
         "static_answer_bank_path": str(pipeline.ANSWER_BANK_PATH),
         "static_answer_bank_version": pipeline.ANSWER_BANK_VERSION,
         "static_answer_bank_sha1": pipeline.static_answer_bank_fingerprint(),
-        "guardrail_enabled": _guardrail_enabled(),
-        "guardrail_url": GUARDRAIL_URL or None,
-        "guardrail_endpoint": _guardrail_endpoint() or None,
-        "guardrail_action": GUARDRAIL_ACTION,
-        "guardrail_fail_closed": GUARDRAIL_FAIL_CLOSED,
         "api_include_sources": API_INCLUDE_SOURCES,
         "llm_audit_rows": len(getattr(pipeline, "LLM_AUDIT_LOG", [])),
         "tool_audit_rows": len(getattr(pipeline, "TOOL_AUDIT_LOG", [])),
@@ -848,8 +833,8 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
     request_uuid = str(uuid.uuid4())
     qid = explicit_qid or state.question_to_id.get(question) or "API-Q"
     pipeline.set_tool_audit_context(qid=qid, request_uuid=request_uuid, route=route)
-    guardrail = _guardrail_predict(question)
-    if guardrail.get("enabled") and guardrail.get("is_attack") and GUARDRAIL_ACTION in {"reject", "block"}:
+    guardrail = _guardrail_predict(question) if _guardrail_enabled() else None
+    if guardrail and guardrail.get("enabled") and guardrail.get("is_attack") and GUARDRAIL_ACTION in {"reject", "block"}:
         answer = "ขอปฏิเสธคำสั่งที่อาจเป็น prompt injection — จะตอบจากข้อมูลในระบบเท่านั้น"
         total_output_token = _count_output_tokens(answer)
         pipeline.log_tool_call(
@@ -864,7 +849,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
             seconds=0,
             output_tokens=total_output_token,
         )
-        obs = {"guardrail": guardrail, "blocked": True}
+        obs = {"blocked": True}
         _save_api_debug(
             qid,
             question,
@@ -893,7 +878,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
             seconds=0,
             output_tokens=total_output_token,
         )
-        obs = {"guardrail": guardrail, "smoke_test": True}
+        obs = {"smoke_test": True}
         _save_api_debug(
             qid,
             question,
@@ -927,7 +912,6 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                     meta={"cache_size": len(state.answer_cache), "cache_hits": state.cache_hits},
                 )
                 obs = {
-                    "guardrail": guardrail,
                     "cache_hit": True,
                     "answer_source": "api_answer_cache",
                     "answer_bank_path": str(pipeline.ANSWER_BANK_PATH),
@@ -977,7 +961,6 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                     seconds=0,
                     output_tokens=total_output_token,
                 )
-                fast_obs["guardrail"] = guardrail
                 fast_obs["cache_miss_fallback_rule"] = True
                 _save_api_debug(
                     qid,
@@ -1005,7 +988,7 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
                 seconds=0,
                 output_tokens=total_output_token,
             )
-            obs = {"guardrail": guardrail, "cache_miss_fallback": True}
+            obs = {"cache_miss_fallback": True}
             _save_api_debug(
                 qid,
                 question,
@@ -1030,8 +1013,6 @@ async def _answer_request(question: str, explicit_qid: str | None, route: str) -
             qid,
             question,
         )
-    obs["guardrail"] = guardrail
-
     seconds = time.time() - t0
     if ENABLE_API_CACHE:
         for key in _cache_keys(qid, question):

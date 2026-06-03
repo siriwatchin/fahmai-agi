@@ -30,9 +30,9 @@ export FAHMAI_SRC_ROOT="${FAHMAI_SRC_ROOT:-$HOME/scamper_house}"
 export QUESTIONS_CSV_PATH="${QUESTIONS_CSV_PATH:-$FAHMAI_SRC_ROOT/questions.csv}"
 export MODEL_PATH="${MODEL_PATH:-$WORK_ROOT/qwen35/models/Qwen2.5-7B-Instruct}"
 
-# DuckDB is the safest default on B200 because local Postgres may not always be
-# mounted. Override with SQL_BACKEND=postgres when localhost:5432/fahmai is up.
-export SQL_BACKEND="${SQL_BACKEND:-duckdb}"
+# Use local PostgreSQL by default; fallback remains enabled for B200 sessions
+# where localhost:5432/fahmai is temporarily unavailable.
+export SQL_BACKEND="${SQL_BACKEND:-postgres}"
 export ALLOW_SQL_FALLBACK="${ALLOW_SQL_FALLBACK:-1}"
 export PG_DSN="${PG_DSN:-postgresql://admin:scamper@localhost:5432/fahmai}"
 export PG_SCHEMA="${PG_SCHEMA:-public}"
