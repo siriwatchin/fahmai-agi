@@ -45,6 +45,8 @@ export GEN_REPETITION_PENALTY="${GEN_REPETITION_PENALTY:-1.05}"
 export DOC_TOP_K="${DOC_TOP_K:-8}"
 export QDRANT_TOP_K="${QDRANT_TOP_K:-8}"
 export SCHEMA_TOP_K="${SCHEMA_TOP_K:-10}"
+export MODEL_REWRITE_ENTITY_GUARD="${MODEL_REWRITE_ENTITY_GUARD:-1}"
+export FINAL_ANSWER_SECURITY_GUARD="${FINAL_ANSWER_SECURITY_GUARD:-1}"
 
 export LLM_AUDIT_INCLUDE_PROMPT="${LLM_AUDIT_INCLUDE_PROMPT:-0}"
 
@@ -67,6 +69,8 @@ echo "  gen_do_sample: $GEN_DO_SAMPLE"
 echo "  doc_top_k: $DOC_TOP_K"
 echo "  qdrant_top_k: $QDRANT_TOP_K"
 echo "  gen_max_input_tokens: $GEN_MAX_INPUT_TOKENS"
+echo "  model_rewrite_entity_guard: $MODEL_REWRITE_ENTITY_GUARD"
+echo "  final_answer_security_guard: $FINAL_ANSWER_SECURITY_GUARD"
 
 args=(--limit "$LIMIT")
 if [ "$NO_QDRANT" = "1" ]; then

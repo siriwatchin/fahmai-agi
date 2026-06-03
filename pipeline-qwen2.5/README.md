@@ -69,6 +69,7 @@ $WORK_ROOT/output/<RUN_ID>/
   best_token_usage.csv
   best_token_summary.json
   best_llm_audit.jsonl
+  best_rewrite_guard.jsonl
 ```
 
 Set `RUN_ID`, `OUTPUT_ROOT`, or `RUN_OUTPUT_DIR` to customize the run folder.
@@ -188,12 +189,19 @@ ENABLE_STATIC_ANSWER_BANK=0
 ANSWER_BANK_FAST_ONLY=0
 GROUNDTRUTH_STYLE_GUIDANCE=1
 MODEL_REWRITE_RULE_ANSWERS=1
+MODEL_REWRITE_ENTITY_GUARD=1
+FINAL_ANSWER_SECURITY_GUARD=1
 FINAL_MAX_NEW_TOKENS=260
 ```
 
 It still uses SQL/RAG/Qdrant as evidence, but Qwen rewrites deterministic
 SQL/rule drafts into final answers using a rubric distilled from the reviewed
 ground-truth response style. It does not map question id to a stored response.
+The rewrite guard keeps this mode from damaging evidence: if the LLM drops or
+mutates critical ids, dates, table names, counts, amounts, or emits known prompt
+injection leakage, the final answer falls back to the deterministic
+SQL/RAG-derived draft. Guard decisions are written to
+`best_rewrite_guard.jsonl` and counted in `best_token_summary.json`.
 
 After a run, compare the generated submission with a reviewed CSV:
 

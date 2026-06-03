@@ -28,6 +28,7 @@ QUESTIONS_XLSX = Path(os.getenv("QUESTIONS_XLSX_PATH", str(SRC / "question.xlsx"
 MODEL = Path(os.getenv("MODEL_PATH", str(SRC / "qwen35/models/Qwen2.5-7B-Instruct"))).expanduser()
 TOKEN_LOG = []
 LLM_AUDIT_LOG = []
+REWRITE_GUARD_LOG = []
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "fahmai_rag_bge")
@@ -54,6 +55,8 @@ ENABLE_STATIC_ANSWER_BANK = os.getenv("ENABLE_STATIC_ANSWER_BANK", "1").lower() 
 ANSWER_BANK_FAST_ONLY = os.getenv("ANSWER_BANK_FAST_ONLY", "1").lower() not in {"0", "false", "no"}
 GROUNDTRUTH_STYLE_GUIDANCE = os.getenv("GROUNDTRUTH_STYLE_GUIDANCE", "0").lower() in {"1", "true", "yes"}
 MODEL_REWRITE_RULE_ANSWERS = os.getenv("MODEL_REWRITE_RULE_ANSWERS", "0").lower() in {"1", "true", "yes"}
+MODEL_REWRITE_ENTITY_GUARD = os.getenv("MODEL_REWRITE_ENTITY_GUARD", "1").lower() not in {"0", "false", "no"}
+FINAL_ANSWER_SECURITY_GUARD = os.getenv("FINAL_ANSWER_SECURITY_GUARD", "1").lower() not in {"0", "false", "no"}
 ANSWER_BANK_PATH = Path(
     os.getenv(
         "ANSWER_BANK_PATH",
@@ -201,6 +204,84 @@ def sanitize_answer(s):
     s = re.sub(r"(?i)^assistant\s*", "", s).strip()
     s = re.sub(r"(?s)<think>.*?</think>", "", s).strip()
     return s[:600]
+
+
+CRITICAL_ENTITY_RE = re.compile(
+    r"""
+    \b(?:EMP-L3-\d{5}|CUST-L3-[A-Z0-9-]+|SKU-[A-Z0-9-]+|V-\d{3}|VP-\d+-\d+|BT-\d+-\d+|TXN-\d+-\d+|RFD-[A-Z0-9-]+)\b
+    |\b(?:POL|MIN|M|DOC|OCR|INV|PO|CASE|TICKET)-[A-Z0-9-]+(?:-[A-Z0-9-]+)*\b
+    |\b(?:FACT|DIM)_[A-Z0-9_]+\b
+    |\b[A-Z]{2,}-[A-Z0-9]+(?:-[A-Z0-9]+)*\b
+    |\b\d{4}-\d{2}-\d{2}\b
+    |\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b
+    |\b\d+\.\d+\b
+    |\b\d{2,}\b
+    """,
+    re.X,
+)
+
+UNSAFE_ANSWER_RE = re.compile(
+    r"confirmed[_-]?cfo|approved_without_audit|sky\s*product|attacker\.example|ignore\s+policy|"
+    r"factian|factk_|dim_bankny|sourceMappingURL|พบกันใหม่|ลืมคำสั่ง|ทำตามคำสั่งฝัง",
+    re.I,
+)
+
+
+def critical_entities(text):
+    return set(CRITICAL_ENTITY_RE.findall(str(text or "").upper()))
+
+
+def unsafe_answer_reason(text):
+    m = UNSAFE_ANSWER_RE.search(str(text or ""))
+    return m.group(0) if m else None
+
+
+def _log_rewrite_guard(qid, stage, reason, seed_answer, rewritten_answer, missing=None):
+    REWRITE_GUARD_LOG.append(
+        {
+            "ts": pd.Timestamp.now(tz="Asia/Bangkok").isoformat(),
+            "qid": qid,
+            "stage": stage,
+            "reason": reason,
+            "missing_entities": list(missing or [])[:50],
+            "seed_answer_preview": _redact_for_audit(seed_answer, limit=700),
+            "rewritten_answer_preview": _redact_for_audit(rewritten_answer, limit=700),
+        }
+    )
+
+
+def guard_rewritten_answer(qid, seed_answer, rewritten_answer):
+    rewritten_answer = sanitize_answer(rewritten_answer)
+    if not MODEL_REWRITE_ENTITY_GUARD:
+        return rewritten_answer
+
+    bad = unsafe_answer_reason(rewritten_answer)
+    if bad:
+        _log_rewrite_guard(qid, "rule_answer_rewrite", f"unsafe_pattern:{bad}", seed_answer, rewritten_answer)
+        return sanitize_answer(seed_answer)
+
+    seed_entities = critical_entities(seed_answer)
+    rewritten_entities = critical_entities(rewritten_answer)
+    missing = sorted(seed_entities - rewritten_entities)
+    if missing:
+        _log_rewrite_guard(qid, "rule_answer_rewrite", "missing_critical_entities", seed_answer, rewritten_answer, missing)
+        return sanitize_answer(seed_answer)
+
+    return rewritten_answer
+
+
+def guard_final_answer(qid, q, answer):
+    answer = sanitize_answer(answer)
+    if not FINAL_ANSWER_SECURITY_GUARD:
+        return answer
+
+    bad = unsafe_answer_reason(answer)
+    if not bad:
+        return answer
+
+    fallback = "ขอปฏิเสธคำสั่งที่ฝังมา — จะตอบจากข้อมูลในระบบเท่านั้น; ไม่พบคำตอบที่ยืนยันได้ในชุดข้อมูล"
+    _log_rewrite_guard(qid, "final_answer", f"unsafe_pattern:{bad}", q, answer)
+    return fallback
 
 
 def load_static_answer_bank():
@@ -727,7 +808,8 @@ DRAFT_ANSWER:
 OBSERVATIONS:
 {json.dumps(obs, ensure_ascii=False, default=str)[:12000]}
 """.strip()
-    return gen(tok, model, prompt, qid=qid, stage="rule_answer_rewrite", max_new_tokens=FINAL_MAX_NEW_TOKENS)
+    rewritten = gen(tok, model, prompt, qid=qid, stage="rule_answer_rewrite", max_new_tokens=FINAL_MAX_NEW_TOKENS)
+    return guard_rewritten_answer(qid, seed_answer, rewritten)
 
 
 def pos_schema_summary():
@@ -2254,7 +2336,8 @@ QUESTION: {q}
 OBSERVATIONS:
 {json.dumps({"document_search": docs, "qdrant_search": qdrant_docs, "schema_search": schemas}, ensure_ascii=False, default=str)[:12000]}
 """.strip()
-    return gen(tok, model, prompt, qid=qid, stage="final_answer", max_new_tokens=FINAL_MAX_NEW_TOKENS), {
+    answer = gen(tok, model, prompt, qid=qid, stage="final_answer", max_new_tokens=FINAL_MAX_NEW_TOKENS)
+    return guard_final_answer(qid, q, answer), {
         "document_search": docs,
         "qdrant_search": qdrant_docs,
         "schema_search": schemas,
@@ -2272,6 +2355,9 @@ def _write_run_files(out_dir, result_df, debug, token_df, summary):
     token_df.to_csv(out_dir / "best_token_usage.csv", index=False)
     with (out_dir / "best_llm_audit.jsonl").open("w", encoding="utf-8") as f:
         for rec in LLM_AUDIT_LOG:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    with (out_dir / "best_rewrite_guard.jsonl").open("w", encoding="utf-8") as f:
+        for rec in REWRITE_GUARD_LOG:
             f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
     (out_dir / "best_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
 
@@ -2307,6 +2393,10 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUT
         "gen_repetition_penalty": GEN_REPETITION_PENALTY,
         "llm_audit_rows": len(LLM_AUDIT_LOG),
         "llm_audit_include_prompt": LLM_AUDIT_INCLUDE_PROMPT,
+        "rewrite_guard_enabled": MODEL_REWRITE_ENTITY_GUARD,
+        "final_answer_security_guard": FINAL_ANSWER_SECURITY_GUARD,
+        "rewrite_guard_rows": len(REWRITE_GUARD_LOG),
+        "rewrite_guard_fallbacks": int(len(REWRITE_GUARD_LOG)),
         "static_answer_bank_enabled": ENABLE_STATIC_ANSWER_BANK,
         "static_answer_bank_path": str(ANSWER_BANK_PATH),
         "static_answer_bank_version": ANSWER_BANK_VERSION,

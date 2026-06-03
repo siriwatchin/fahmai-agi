@@ -36,6 +36,8 @@ export ENABLE_STATIC_ANSWER_BANK="0"
 export ANSWER_BANK_FAST_ONLY="0"
 export GROUNDTRUTH_STYLE_GUIDANCE="1"
 export MODEL_REWRITE_RULE_ANSWERS="1"
+export MODEL_REWRITE_ENTITY_GUARD="${MODEL_REWRITE_ENTITY_GUARD:-1}"
+export FINAL_ANSWER_SECURITY_GUARD="${FINAL_ANSWER_SECURITY_GUARD:-1}"
 export ANSWER_BANK_VERSION="model_qwen25_gt_style_no_bank"
 
 export MODEL_LOAD_STRATEGY="${MODEL_LOAD_STRATEGY:-cuda_direct}"
@@ -64,6 +66,8 @@ echo "  model_path: $MODEL_PATH"
 echo "  static_answer_bank: disabled"
 echo "  groundtruth_style_guidance: $GROUNDTRUTH_STYLE_GUIDANCE"
 echo "  model_rewrite_rule_answers: $MODEL_REWRITE_RULE_ANSWERS"
+echo "  model_rewrite_entity_guard: $MODEL_REWRITE_ENTITY_GUARD"
+echo "  final_answer_security_guard: $FINAL_ANSWER_SECURITY_GUARD"
 echo "  final_max_new_tokens: $FINAL_MAX_NEW_TOKENS"
 
 args=(--limit "$LIMIT")
