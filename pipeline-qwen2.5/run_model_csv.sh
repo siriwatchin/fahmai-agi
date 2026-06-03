@@ -30,8 +30,9 @@ export EMBED_MODEL="${EMBED_MODEL:-$WORK_ROOT/qwen35/models/bge-m3}"
 export NO_QDRANT="${NO_QDRANT:-0}"
 export SKIP_QDRANT_PRELOAD="${SKIP_QDRANT_PRELOAD:-0}"
 
-export ENABLE_STATIC_ANSWER_BANK=0
-export ANSWER_BANK_FAST_ONLY=0
+export ENABLE_STATIC_ANSWER_BANK="${ENABLE_STATIC_ANSWER_BANK:-0}"
+export ANSWER_BANK_FAST_ONLY="${ANSWER_BANK_FAST_ONLY:-0}"
+export ANSWER_BANK_PATH="${ANSWER_BANK_PATH:-$(pwd)/fahmai_qwen25/answer_bank_best.csv}"
 export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-model_qwen25_7b_rag}"
 
 export MODEL_LOAD_STRATEGY="${MODEL_LOAD_STRATEGY:-cuda_direct}"
@@ -59,7 +60,9 @@ echo "  qdrant_api_key_set: $([ -n "${QDRANT_API_KEY:-}" ] && echo yes || echo n
 echo "  qdrant_collection: ${QDRANT_COLLECTION:-}"
 echo "  embed_model: $EMBED_MODEL"
 echo "  model_path: $MODEL_PATH"
-echo "  static_answer_bank: disabled"
+echo "  static_answer_bank: $([ "$ENABLE_STATIC_ANSWER_BANK" = "1" ] && echo enabled || echo disabled)"
+echo "  answer_bank_fast_only: $ANSWER_BANK_FAST_ONLY"
+echo "  answer_bank_path: $ANSWER_BANK_PATH"
 echo "  gen_do_sample: $GEN_DO_SAMPLE"
 echo "  doc_top_k: $DOC_TOP_K"
 echo "  qdrant_top_k: $QDRANT_TOP_K"

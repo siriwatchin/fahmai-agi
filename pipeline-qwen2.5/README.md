@@ -93,6 +93,19 @@ Use this for public-score submission rehearsal and load-test stability.
 
 Run on B200:
 
+Recommended score-submission command:
+
+```bash
+cd ~/fahmai-agi
+git pull origin main
+
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_score_csv_postgres.sh
+```
+
+Manual equivalent:
+
 ```bash
 cd ~/fahmai-agi/pipeline-qwen2.5
 source ~/venvs/qwen35/bin/activate
@@ -155,6 +168,14 @@ MODEL_PATH=~/bank500/qwen35/models/Qwen2.5-7B-Instruct
 ENABLE_STATIC_ANSWER_BANK=0
 ANSWER_BANK_FAST_ONLY=0
 ```
+
+For the strict local Postgres measurement path use:
+
+```bash
+./run_model_csv_postgres.sh
+```
+
+For highest public-score rehearsal use `./run_score_csv_postgres.sh` instead.
 
 For a quick smoke run:
 
