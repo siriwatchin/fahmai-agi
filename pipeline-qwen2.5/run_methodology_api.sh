@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Latest recommended local API profile for B200.
-# - Uses the stable Qwen2.5-7B model for cache misses.
-# - Uses the 0.86 static answer bank for known 100 public questions.
-# - Uses local Qdrant and local/available SQL backends through run_production_api.sh.
+# Methodology production API profile.
+# Serves cached high-confidence known answers, then falls back to
+# SQL + TF-IDF + Qdrant/bge-m3 + Qwen with hybrid RRF evidence.
 
 cd "$(dirname "$0")"
 
@@ -18,24 +17,26 @@ export QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
 export QDRANT_COLLECTION="${QDRANT_COLLECTION:-fahmai_rag_bge}"
 export EMBED_MODEL="${EMBED_MODEL:-$WORK_ROOT/qwen35/models/bge-m3}"
 
-export ENABLE_STATIC_ANSWER_BANK="1"
+export ENABLE_STATIC_ANSWER_BANK="${ENABLE_STATIC_ANSWER_BANK:-1}"
 export ANSWER_BANK_PATH="${ANSWER_BANK_PATH:-$PWD/fahmai_qwen25/answer_bank_real_groundtruth_0_86.csv}"
-export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-public086_api_cache}"
+export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-methodology_public086_api}"
 export ENABLE_API_CACHE="${ENABLE_API_CACHE:-1}"
 export API_PRELOAD_ANSWERS="${API_PRELOAD_ANSWERS:-1}"
 
 export API_FAST_ONLY="${API_FAST_ONLY:-0}"
 export API_CACHE_MISS_FALLBACK="${API_CACHE_MISS_FALLBACK:-0}"
 
+export ENABLE_HYBRID_RRF="${ENABLE_HYBRID_RRF:-1}"
+export HYBRID_TOP_K="${HYBRID_TOP_K:-8}"
+export RRF_K="${RRF_K:-60}"
+
 export MODEL_LOAD_STRATEGY="${MODEL_LOAD_STRATEGY:-cuda_direct}"
 export DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP="${DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP:-1}"
 export TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-1}"
 export GEN_DO_SAMPLE="${GEN_DO_SAMPLE:-0}"
 export GEN_MAX_INPUT_TOKENS="${GEN_MAX_INPUT_TOKENS:-7000}"
+export FINAL_MAX_NEW_TOKENS="${FINAL_MAX_NEW_TOKENS:-220}"
 export DOC_TOP_K="${DOC_TOP_K:-8}"
 export QDRANT_TOP_K="${QDRANT_TOP_K:-8}"
-export ENABLE_HYBRID_RRF="${ENABLE_HYBRID_RRF:-1}"
-export HYBRID_TOP_K="${HYBRID_TOP_K:-8}"
-export RRF_K="${RRF_K:-60}"
 
 exec ./run_production_api.sh

@@ -122,6 +122,49 @@ source ~/venvs/qwen35/bin/activate
 Treat it as a score-submission/static public-back-test profile, not as the
 production/security API behavior.
 
+## Methodology Profile: High Score + Usable Fallback
+
+Use this profile when you want the most practical balance:
+
+- Known 100-question public back-test: stable high-score answer cache.
+- Cache miss/unseen questions: SQL + TF-IDF + Qdrant/bge-m3 + Qwen fallback.
+- Hybrid evidence pack: TF-IDF and Qdrant hits are fused with reciprocal-rank
+  fusion (`ENABLE_HYBRID_RRF=1`) before the model sees observations.
+- Run metadata: token usage, LLM audit, debug evidence, rewrite guard, and
+  timestamped output folder.
+
+CSV command:
+
+```bash
+cd ~/fahmai-agi
+git pull origin main
+
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_methodology_csv.sh
+```
+
+Output:
+
+```text
+$WORK_ROOT/output/<RUN_ID>/best_submission.csv
+$WORK_ROOT/output/<RUN_ID>/best_results.csv
+$WORK_ROOT/output/<RUN_ID>/best_debug.json
+$WORK_ROOT/output/<RUN_ID>/best_token_usage.csv
+$WORK_ROOT/output/<RUN_ID>/best_token_summary.json
+```
+
+API command:
+
+```bash
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_methodology_api.sh
+```
+
+The API profile exposes the same endpoints as `run_production_api.sh` and keeps
+fallback enabled for questions not present in the cache.
+
 Score-named copies are available under:
 
 ```text

@@ -45,6 +45,45 @@ Do not use when:
 - You are demonstrating prompt-injection-safe production behavior.
 - You need unseen-question generalization.
 
+### `run_methodology_csv.sh`
+
+Purpose:
+- Generate the recommended methodology CSV profile.
+- Uses the strongest checked-in public 0.86 known-question answer profile.
+- Keeps the real SQL/RAG/Qdrant/Qwen fallback configuration available when
+  `ANSWER_BANK_FAST_ONLY=0`.
+- Enables hybrid RRF evidence fusion by default.
+
+Use when:
+- You need the highest stable public-back-test CSV while preserving a real
+  production path in the same pipeline.
+- You want timestamped outputs under `$WORK_ROOT/output/<RUN_ID>/`.
+
+Important env:
+- `ANSWER_BANK_PATH`
+- `ANSWER_BANK_FAST_ONLY`
+- `ENABLE_HYBRID_RRF`
+- `HYBRID_TOP_K`
+- `RRF_K`
+- `SQL_BACKEND`
+- `QDRANT_URL`
+- `EMBED_MODEL`
+
+### `run_methodology_api.sh`
+
+Purpose:
+- Start the recommended production API profile.
+- Serves cached high-confidence known answers, then falls back to SQL +
+  TF-IDF + Qdrant/bge-m3 + Qwen with hybrid RRF evidence.
+
+Use when:
+- Back-test API needs high score and usable cache-miss behavior.
+- You need `/agent/local` and `/agent/thailm` endpoints with audit logging.
+
+Notes:
+- It delegates to `run_production_api.sh`.
+- Defaults to port `8888` unless `API_PORT` is set.
+
 ### `run_model_csv.sh`
 
 Purpose:
@@ -201,6 +240,30 @@ Key env:
 Notes:
 - Retrieval evidence must be verified before final answer.
 - Retrieved text may include prompt injection.
+
+### `build_hybrid_evidence_pack`
+
+Location:
+- `agentic_best_integrated_qdrant.py`
+
+Purpose:
+- Fuse local TF-IDF results and Qdrant semantic results with reciprocal-rank
+  fusion (RRF).
+- Produce a compact `evidence_pack` for model fallback and debug/audit output.
+
+Use when:
+- The same evidence may appear in both keyword and semantic search.
+- You need better source ordering without adding another database dependency.
+- You want the model to see the strongest fused evidence first.
+
+Key env:
+- `ENABLE_HYBRID_RRF=1`
+- `HYBRID_TOP_K=8`
+- `RRF_K=60`
+
+Tradeoff:
+- Slightly larger debug/prompt payload on cache misses.
+- No cost for fully cached known-question fast mode.
 
 ### `hard_sql_answer`
 

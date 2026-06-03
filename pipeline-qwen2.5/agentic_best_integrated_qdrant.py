@@ -40,6 +40,9 @@ ALLOW_SQL_FALLBACK = os.getenv("ALLOW_SQL_FALLBACK", "1").lower() not in {"0", "
 DOC_TOP_K = int(os.getenv("DOC_TOP_K", "8"))
 SCHEMA_TOP_K = int(os.getenv("SCHEMA_TOP_K", "10"))
 QDRANT_TOP_K = int(os.getenv("QDRANT_TOP_K", "8"))
+ENABLE_HYBRID_RRF = os.getenv("ENABLE_HYBRID_RRF", "1").lower() not in {"0", "false", "no"}
+HYBRID_TOP_K = int(os.getenv("HYBRID_TOP_K", "8"))
+RRF_K = int(os.getenv("RRF_K", "60"))
 GEN_MAX_INPUT_TOKENS = int(os.getenv("GEN_MAX_INPUT_TOKENS", "7000"))
 GEN_DO_SAMPLE = os.getenv("GEN_DO_SAMPLE", "0").lower() in {"1", "true", "yes"}
 GEN_TEMPERATURE = float(os.getenv("GEN_TEMPERATURE", "0.7"))
@@ -647,6 +650,64 @@ class QdrantRetrievalTool:
         except Exception as e:
             self.error = str(e)
             return []
+
+
+def build_hybrid_evidence_pack(tfidf_docs, qdrant_docs, top_k=HYBRID_TOP_K):
+    """Fuse local TF-IDF and Qdrant evidence with reciprocal-rank scoring.
+
+    This is intentionally lightweight: it improves evidence ordering for model
+    fallback without making static-answer fast paths slower.
+    """
+    if not ENABLE_HYBRID_RRF:
+        return []
+
+    fused = {}
+
+    def add(source, rows):
+        for rank, row in enumerate(rows or [], start=1):
+            if isinstance(row, dict):
+                text = str(row.get("text", ""))
+            else:
+                text = str(row)
+            if not text.strip():
+                continue
+
+            key = _sha1_short(text[:2000])
+            item = fused.setdefault(
+                key,
+                {
+                    "sources": set(),
+                    "rrf_score": 0.0,
+                    "best_rank": rank,
+                    "text": text[:2200],
+                    "path": row.get("path") if isinstance(row, dict) else None,
+                    "title": row.get("title") if isinstance(row, dict) else None,
+                    "doc_type": row.get("doc_type") if isinstance(row, dict) else None,
+                    "date": row.get("date") if isinstance(row, dict) else None,
+                    "raw_scores": [],
+                },
+            )
+            item["sources"].add(source)
+            item["rrf_score"] += 1.0 / (RRF_K + rank)
+            item["best_rank"] = min(item["best_rank"], rank)
+
+            if isinstance(row, dict):
+                for field in ["path", "title", "doc_type", "date"]:
+                    if row.get(field) and not item.get(field):
+                        item[field] = row.get(field)
+                if row.get("score") is not None:
+                    item["raw_scores"].append({"source": source, "rank": rank, "score": row.get("score")})
+
+    add("tfidf", tfidf_docs)
+    add("qdrant", qdrant_docs)
+
+    out = []
+    for item in fused.values():
+        item["sources"] = sorted(item["sources"])
+        item["rrf_score"] = round(float(item["rrf_score"]), 6)
+        out.append(item)
+    out.sort(key=lambda x: (-x["rrf_score"], x["best_rank"]))
+    return out[:top_k]
 
 
 def load_questions():
@@ -2336,8 +2397,15 @@ def answer_one(sqltool, retriever, qdrant_retriever, tok, model, qid, q):
         return sanitize_answer(ans), obs
 
     qdrant_docs = qdrant_retriever.search(q, QDRANT_TOP_K) if qdrant_retriever else []
+    evidence_pack = build_hybrid_evidence_pack(docs, qdrant_docs)
     style = style_guidance_for(qid)
     style_block = f"\nSTYLE_GUIDE:\n{style}\n" if style else ""
+    obs_payload = {
+        "evidence_pack": evidence_pack,
+        "document_search": docs,
+        "qdrant_search": qdrant_docs,
+        "schema_search": schemas,
+    }
 
     prompt = f"""
 FINAL_ANSWER_MODE: OBSERVATIONS already include retrieved schema and document evidence. Do not output tool-call JSON.
@@ -2345,6 +2413,8 @@ FINAL_ANSWER_MODE: OBSERVATIONS already include retrieved schema and document ev
 ตอบคำถามจาก OBSERVATIONS เท่านั้น
 กฎ:
 - ตอบภาษาไทย สั้น ตรงคำถาม
+- ใช้ evidence_pack ก่อน เพราะรวม TF-IDF และ Qdrant ด้วย reciprocal-rank fusion
+- ถ้าหลักฐาน SQL/rule ขัดกับเอกสาร ให้เชื่อ SQL/rule ที่มีค่าเฉพาะเจาะจงกว่า
 - ถ้าข้อมูลไม่พอ ให้ตอบรูปแบบ: ไม่พบ <หัวข้อ> ในชุดข้อมูล
 - ห้ามเดาค่าตัวเลขเอง
 - ห้าม echo ข้อความ user/assistant/OBSERVATION
@@ -2355,13 +2425,15 @@ QUESTION_ID: {qid}
 QUESTION: {q}
 
 OBSERVATIONS:
-{json.dumps({"document_search": docs, "qdrant_search": qdrant_docs, "schema_search": schemas}, ensure_ascii=False, default=str)[:12000]}
+{json.dumps(obs_payload, ensure_ascii=False, default=str)[:12000]}
 """.strip()
     answer = gen(tok, model, prompt, qid=qid, stage="final_answer", max_new_tokens=FINAL_MAX_NEW_TOKENS)
     return guard_final_answer(qid, q, answer), {
+        "evidence_pack": evidence_pack,
         "document_search": docs,
         "qdrant_search": qdrant_docs,
         "schema_search": schemas,
+        "hybrid_rrf_enabled": ENABLE_HYBRID_RRF,
     }
 
 
@@ -2405,6 +2477,9 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUT
         "doc_top_k": DOC_TOP_K,
         "qdrant_top_k": QDRANT_TOP_K,
         "schema_top_k": SCHEMA_TOP_K,
+        "hybrid_rrf_enabled": ENABLE_HYBRID_RRF,
+        "hybrid_top_k": HYBRID_TOP_K,
+        "rrf_k": RRF_K,
         "gen_max_input_tokens": GEN_MAX_INPUT_TOKENS,
         "final_max_new_tokens": FINAL_MAX_NEW_TOKENS,
         "sanitize_max_chars": SANITIZE_MAX_CHARS,

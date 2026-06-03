@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Methodology score profile.
+# Known 100-question back-test: use the checked-in 0.86 answer profile for
+# stability and speed. Cache misses still keep the same SQL/RAG/Qdrant/Qwen
+# configuration if ANSWER_BANK_FAST_ONLY is disabled by the caller.
+
+cd "$(dirname "$0")"
+
+export WORK_ROOT="${WORK_ROOT:-$HOME/bank500}"
+export FAHMAI_SRC_ROOT="${FAHMAI_SRC_ROOT:-$HOME/scamper_house}"
+export QUESTIONS_CSV_PATH="${QUESTIONS_CSV_PATH:-$FAHMAI_SRC_ROOT/questions.csv}"
+export MODEL_PATH="${MODEL_PATH:-$WORK_ROOT/qwen35/models/Qwen2.5-7B-Instruct}"
+
+export SQL_BACKEND="${SQL_BACKEND:-duckdb}"
+export QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
+export QDRANT_COLLECTION="${QDRANT_COLLECTION:-fahmai_rag_bge}"
+export EMBED_MODEL="${EMBED_MODEL:-$WORK_ROOT/qwen35/models/bge-m3}"
+
+export ENABLE_STATIC_ANSWER_BANK="${ENABLE_STATIC_ANSWER_BANK:-1}"
+export ANSWER_BANK_FAST_ONLY="${ANSWER_BANK_FAST_ONLY:-1}"
+export ANSWER_BANK_PATH="${ANSWER_BANK_PATH:-$PWD/fahmai_qwen25/answer_bank_real_groundtruth_0_86.csv}"
+export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-methodology_public086_hybrid}"
+
+export ENABLE_HYBRID_RRF="${ENABLE_HYBRID_RRF:-1}"
+export HYBRID_TOP_K="${HYBRID_TOP_K:-8}"
+export RRF_K="${RRF_K:-60}"
+
+export MODEL_LOAD_STRATEGY="${MODEL_LOAD_STRATEGY:-cuda_direct}"
+export DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP="${DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP:-1}"
+export TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-1}"
+export GEN_DO_SAMPLE="${GEN_DO_SAMPLE:-0}"
+export GEN_MAX_INPUT_TOKENS="${GEN_MAX_INPUT_TOKENS:-7000}"
+export FINAL_MAX_NEW_TOKENS="${FINAL_MAX_NEW_TOKENS:-220}"
+export DOC_TOP_K="${DOC_TOP_K:-8}"
+export QDRANT_TOP_K="${QDRANT_TOP_K:-8}"
+export SANITIZE_MAX_CHARS="${SANITIZE_MAX_CHARS:-2000}"
+
+LIMIT="${LIMIT:-100}"
+
+echo "Starting FahMai methodology CSV run"
+echo "  limit: $LIMIT"
+echo "  sql_backend: $SQL_BACKEND"
+echo "  qdrant_url: $QDRANT_URL"
+echo "  qdrant_collection: $QDRANT_COLLECTION"
+echo "  model_path: $MODEL_PATH"
+echo "  answer_bank: $ANSWER_BANK_PATH"
+echo "  answer_bank_fast_only: $ANSWER_BANK_FAST_ONLY"
+echo "  hybrid_rrf: $ENABLE_HYBRID_RRF top_k=$HYBRID_TOP_K rrf_k=$RRF_K"
+
+exec python agentic_best_integrated_qdrant.py --limit "$LIMIT" --skip-qdrant-preload
