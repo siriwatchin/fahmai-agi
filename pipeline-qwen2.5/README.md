@@ -122,11 +122,25 @@ source ~/venvs/qwen35/bin/activate
 Treat it as a score-submission/static public-back-test profile, not as the
 production/security API behavior.
 
+Public 0.89 candidate profile:
+
+```bash
+cd ~/fahmai-agi
+git pull origin main
+
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_score_csv_public089.sh
+```
+
+`run_score_csv_public089.sh` uses `fahmai_qwen25/answer_bank_peterperjer_0_89.csv`.
+This is currently the strongest known public-score static profile.
+
 ## Methodology Profile: High Score + Usable Fallback
 
 Use this profile when you want the most practical balance:
 
-- Known 100-question public back-test: stable high-score answer cache.
+- Known 100-question public back-test: stable 0.89 high-score answer cache.
 - Cache miss/unseen questions: SQL + TF-IDF + Qdrant/bge-m3 + Qwen fallback.
 - Hybrid evidence pack: TF-IDF and Qdrant hits are fused with reciprocal-rank
   fusion (`ENABLE_HYBRID_RRF=1`) before the model sees observations.
@@ -162,8 +176,9 @@ source ~/venvs/qwen35/bin/activate
 ./run_methodology_api.sh
 ```
 
-The API profile exposes the same endpoints as `run_production_api.sh` and keeps
-fallback enabled for questions not present in the cache.
+The API profile exposes the same endpoints as `run_production_api.sh`, uses the
+0.89 known-answer cache by default, and keeps fallback enabled for questions not
+present in the cache.
 
 Score-named copies are available under:
 

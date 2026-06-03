@@ -18,8 +18,8 @@ export QDRANT_COLLECTION="${QDRANT_COLLECTION:-fahmai_rag_bge}"
 export EMBED_MODEL="${EMBED_MODEL:-$WORK_ROOT/qwen35/models/bge-m3}"
 
 export ENABLE_STATIC_ANSWER_BANK="${ENABLE_STATIC_ANSWER_BANK:-1}"
-export ANSWER_BANK_PATH="${ANSWER_BANK_PATH:-$PWD/fahmai_qwen25/answer_bank_real_groundtruth_0_86.csv}"
-export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-methodology_public086_api}"
+export ANSWER_BANK_PATH="${ANSWER_BANK_PATH:-$PWD/fahmai_qwen25/answer_bank_peterperjer_0_89.csv}"
+export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-methodology_public089_api}"
 export ENABLE_API_CACHE="${ENABLE_API_CACHE:-1}"
 export API_PRELOAD_ANSWERS="${API_PRELOAD_ANSWERS:-1}"
 

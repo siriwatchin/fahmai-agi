@@ -4,6 +4,7 @@
 
 | File | Known score | Source |
 |---|---:|---|
+| `score_0_89__answer_bank_peterperjer.csv` | 0.89 | `../answer_bank_peterperjer_0_89.csv` |
 | `score_0_86__answer_bank_real_groundtruth.csv` | 0.86 | `../answer_bank_real_groundtruth_0_86.csv` |
 | `score_unknown__answer_bank_current_best.csv` | unknown | `../answer_bank_best.csv` |
 | `score_unknown__answer_bank_best_v8_ref_inj9_safe.csv` | unknown | `../answer_bank_best_v8_ref_inj9_safe.csv` |
@@ -12,4 +13,4 @@
 | `score_unknown__answer_bank_best_v6.csv` | unknown | `../answer_bank_best_v6.csv` |
 | `score_unknown__answer_bank_best_from_scored_submission.csv` | unknown | `../answer_bank_best_from_scored_submission.csv` |
 
-ใช้ `score_0_86__answer_bank_real_groundtruth.csv` สำหรับ reproduce public score candidate ล่าสุด.
+ใช้ `score_0_89__answer_bank_peterperjer.csv` สำหรับ reproduce public score candidate ล่าสุด.

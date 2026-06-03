@@ -20,8 +20,8 @@ export EMBED_MODEL="${EMBED_MODEL:-$WORK_ROOT/qwen35/models/bge-m3}"
 
 export ENABLE_STATIC_ANSWER_BANK="${ENABLE_STATIC_ANSWER_BANK:-1}"
 export ANSWER_BANK_FAST_ONLY="${ANSWER_BANK_FAST_ONLY:-1}"
-export ANSWER_BANK_PATH="${ANSWER_BANK_PATH:-$PWD/fahmai_qwen25/answer_bank_real_groundtruth_0_86.csv}"
-export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-methodology_public086_hybrid}"
+export ANSWER_BANK_PATH="${ANSWER_BANK_PATH:-$PWD/fahmai_qwen25/answer_bank_peterperjer_0_89.csv}"
+export ANSWER_BANK_VERSION="${ANSWER_BANK_VERSION:-methodology_public089_hybrid}"
 
 export ENABLE_HYBRID_RRF="${ENABLE_HYBRID_RRF:-1}"
 export HYBRID_TOP_K="${HYBRID_TOP_K:-8}"

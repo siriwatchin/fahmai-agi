@@ -45,11 +45,26 @@ Do not use when:
 - You are demonstrating prompt-injection-safe production behavior.
 - You need unseen-question generalization.
 
+### `run_score_csv_public089.sh`
+
+Purpose:
+- Generate the current strongest known public 0.89 candidate CSV from
+  `answer_bank_peterperjer_0_89.csv`.
+- Score-only fast mode for the known 100-question public back-test.
+- Skips SQL/retrieval/Qdrant/model loading in fast-only mode.
+
+Use when:
+- You need the highest known Kaggle public-score submission candidate right now.
+- You want the fastest deterministic output for known public questions.
+
+Do not use when:
+- You need to demonstrate unseen-question generalization by the model itself.
+
 ### `run_methodology_csv.sh`
 
 Purpose:
 - Generate the recommended methodology CSV profile.
-- Uses the strongest checked-in public 0.86 known-question answer profile.
+- Uses the strongest checked-in public 0.89 known-question answer profile.
 - Keeps the real SQL/RAG/Qdrant/Qwen fallback configuration available when
   `ANSWER_BANK_FAST_ONLY=0`.
 - Enables hybrid RRF evidence fusion by default.
