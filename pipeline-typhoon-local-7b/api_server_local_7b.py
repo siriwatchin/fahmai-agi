@@ -217,18 +217,50 @@ def _is_msrp_question(question: str) -> bool:
     return any(word in q for word in ["msrp", "ราคา", "เท่าไหร่"])
 
 
+def _sql_literal(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _product_msrp_sql_candidates(sku: str) -> list[str]:
+    sku_lit = _sql_literal(sku)
+    sku_key_lit = _sql_literal(re.sub(r"[^A-Z0-9]", "", sku.upper()))
     return [
         (
             'SELECT sku_id, msrp_thb '
             'FROM public."DIM_PRODUCT" '
-            f"WHERE sku_id = '{sku}' "
+            f"WHERE sku_id = {sku_lit} "
             "LIMIT 1"
         ),
         (
             "SELECT sku_id, msrp_thb "
             "FROM DIM_PRODUCT "
-            f"WHERE sku_id = '{sku}' "
+            f"WHERE sku_id = {sku_lit} "
+            "LIMIT 1"
+        ),
+        (
+            'SELECT sku_id, msrp_thb '
+            'FROM public."DIM_PRODUCT" '
+            f"WHERE upper(trim(sku_id::text)) = upper({sku_lit}) "
+            "LIMIT 1"
+        ),
+        (
+            'SELECT sku_id, msrp_thb '
+            'FROM public."DIM_PRODUCT" '
+            "WHERE regexp_replace(upper(sku_id::text), '[^A-Z0-9]', '', 'g') = "
+            f"{sku_key_lit} "
+            "LIMIT 1"
+        ),
+        (
+            "SELECT sku_id, msrp_thb "
+            "FROM DIM_PRODUCT "
+            f"WHERE upper(trim(sku_id::text)) = upper({sku_lit}) "
+            "LIMIT 1"
+        ),
+        (
+            "SELECT sku_id, msrp_thb "
+            "FROM DIM_PRODUCT "
+            "WHERE regexp_replace(upper(sku_id::text), '[^A-Z0-9]', '', 'g') = "
+            f"{sku_key_lit} "
             "LIMIT 1"
         ),
     ]

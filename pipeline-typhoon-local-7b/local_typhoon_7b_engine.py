@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -91,6 +92,38 @@ def build_local_client() -> Any:
     return OpenAICompatibleLocalClient(base_url, os.getenv("LOCAL_TYPHOON_MODEL", DEFAULT_7B_MODEL))
 
 
+def _message_content(messages: list[dict[str, Any]]) -> str:
+    return "\n".join(str(msg.get("content") or "") for msg in messages or [])
+
+
+def _is_product_value_question(messages: list[dict[str, Any]]) -> bool:
+    text = _message_content(messages)
+    return bool(re.search(r"\b[A-Z]{2,}(?:-[A-Z0-9]+)+\b", text)) and any(
+        marker in text.lower() for marker in ["msrp", "ราคา", "เท่าไหร่", "warranty"]
+    )
+
+
+def _with_7b_tool_fewshot(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_product_value_question(messages):
+        return messages
+    guidance = (
+        "7B TOOL ROUTING FEW-SHOT:\n"
+        "For product code/SKU value questions, do NOT use retrieval, qdrant, or document search first.\n"
+        "Extract the SKU exactly from the user question, then call postgres_execute_readonly_sql.\n"
+        "Example question: MSRP ของสินค้ารหัส NT-LT-001 เป็นเท่าไหร่ครับ\n"
+        "Correct first tool call JSON:\n"
+        "{\"name\":\"postgres_execute_readonly_sql\",\"arguments\":{\"sql\":\"SELECT sku_id, msrp_thb FROM public.\\\"DIM_PRODUCT\\\" WHERE upper(trim(sku_id::text)) = upper('NT-LT-001') LIMIT 1\",\"limit\":1}}\n"
+        "If exact format may differ, normalize with regexp_replace(upper(sku_id::text), '[^A-Z0-9]', '', 'g').\n"
+        "After TOOL_RESULT rows are available, answer from those rows only in Thai plain text."
+    )
+    if messages and messages[0].get("role") == "system":
+        out = [dict(messages[0])]
+        out[0]["content"] = f"{guidance}\n\n{out[0].get('content') or ''}"
+        out.extend(messages[1:])
+        return out
+    return [{"role": "system", "content": guidance}, *messages]
+
+
 def install_7b_call_typhoon(pipeline_module: Any, client: Any | None = None) -> Any:
     apply_7b_defaults()
     local_client = client or build_local_client()
@@ -105,7 +138,7 @@ def install_7b_call_typhoon(pipeline_module: Any, client: Any | None = None) -> 
         timeout: int = 120,
     ) -> dict[str, Any]:
         data = local_client.chat_completion(
-            messages,
+            _with_7b_tool_fewshot(messages),
             tools,
             tool_choice=tool_choice,
             temperature=temperature,
