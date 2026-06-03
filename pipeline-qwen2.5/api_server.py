@@ -5,13 +5,16 @@ import json
 import os
 import re
 import time
+import urllib.error
+import urllib.request
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import agentic_best_integrated_qdrant as pipeline
@@ -21,6 +24,19 @@ API_OUTPUT_DIR = Path(os.getenv("API_OUTPUT_DIR", str(Path.home() / "bank500")))
 NO_QDRANT = os.getenv("NO_QDRANT", "0").lower() in {"1", "true", "yes"}
 SKIP_QDRANT_PRELOAD = os.getenv("SKIP_QDRANT_PRELOAD", "0").lower() in {"1", "true", "yes"}
 API_PORT = int(os.getenv("API_PORT", "8888"))
+ENABLE_API_CACHE = os.getenv("ENABLE_API_CACHE", "1").lower() not in {"0", "false", "no"}
+API_PRELOAD_ANSWERS = os.getenv("API_PRELOAD_ANSWERS", "1").lower() not in {"0", "false", "no"}
+API_PRELOAD_RESULTS = Path(os.getenv("API_PRELOAD_RESULTS", "")).expanduser() if os.getenv("API_PRELOAD_RESULTS") else None
+API_CACHE_MISS_FALLBACK = os.getenv("API_CACHE_MISS_FALLBACK", "0").lower() in {"1", "true", "yes"}
+API_CACHE_MISS_FALLBACK_ANSWER = os.getenv("API_CACHE_MISS_FALLBACK_ANSWER", "ไม่พบคำตอบที่ยืนยันได้ภายในเวลาที่กำหนดในชุดข้อมูล")
+API_FAST_ONLY = os.getenv("API_FAST_ONLY", "0").lower() in {"1", "true", "yes"}
+GUARDRAIL_URL = os.getenv("GUARDRAIL_URL", "").rstrip("/")
+GUARDRAIL_MODEL = os.getenv("GUARDRAIL_MODEL", "model")
+GUARDRAIL_THRESHOLD = os.getenv("GUARDRAIL_THRESHOLD")
+GUARDRAIL_MAX_LENGTH = int(os.getenv("GUARDRAIL_MAX_LENGTH", "510"))
+GUARDRAIL_TIMEOUT_SEC = float(os.getenv("GUARDRAIL_TIMEOUT_SEC", "2.0"))
+GUARDRAIL_ACTION = os.getenv("GUARDRAIL_ACTION", "audit_only").lower()
+GUARDRAIL_FAIL_CLOSED = os.getenv("GUARDRAIL_FAIL_CLOSED", "0").lower() in {"1", "true", "yes"}
 
 
 def _norm_question(text: str) -> str:
@@ -40,6 +56,44 @@ def _thai_today() -> str:
     return names[pd.Timestamp.now(tz="Asia/Bangkok").weekday()]
 
 
+def _guardrail_enabled() -> bool:
+    return bool(GUARDRAIL_URL)
+
+
+def _guardrail_predict(text: str) -> dict[str, Any]:
+    if not _guardrail_enabled():
+        return {"enabled": False}
+
+    payload: dict[str, Any] = {
+        "model": GUARDRAIL_MODEL,
+        "text": text,
+        "max_length": GUARDRAIL_MAX_LENGTH,
+    }
+    if GUARDRAIL_THRESHOLD not in {None, ""}:
+        payload["threshold"] = float(GUARDRAIL_THRESHOLD)
+
+    req = urllib.request.Request(
+        f"{GUARDRAIL_URL}/predict",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=GUARDRAIL_TIMEOUT_SEC) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        data["enabled"] = True
+        data["action"] = GUARDRAIL_ACTION
+        return data
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
+        return {
+            "enabled": True,
+            "error": str(exc),
+            "is_attack": bool(GUARDRAIL_FAIL_CLOSED),
+            "action": GUARDRAIL_ACTION,
+            "fail_closed": GUARDRAIL_FAIL_CLOSED,
+        }
+
+
 class ChatPayload(BaseModel):
     question: str = Field(..., min_length=1)
     id: str | None = None
@@ -57,6 +111,17 @@ class ChatResponse(BaseModel):
     data: ChatAnswer
 
 
+class AgentRequest(BaseModel):
+    question: str = Field(..., min_length=1)
+    id: str | None = None
+
+
+class AgentResponse(BaseModel):
+    id: str
+    answer: str
+    total_output_token: int
+
+
 @dataclass
 class RuntimeState:
     sqltool: Any
@@ -65,6 +130,9 @@ class RuntimeState:
     tok: Any
     model: Any
     question_to_id: dict[str, str]
+    answer_cache: dict[str, str]
+    cache_hits: int
+    cache_misses: int
     lock: asyncio.Lock
 
 
@@ -85,20 +153,123 @@ def _load_question_index() -> dict[str, str]:
     return question_to_id
 
 
-def _save_api_debug(qid: str, question: str, answer: str, obs: dict[str, Any], seconds: float) -> None:
+def _cache_keys(qid: str | None, question: str) -> list[str]:
+    question = _norm_question(question)
+    keys = []
+    if qid:
+        keys.append(f"id:{qid}")
+    if question:
+        keys.append(f"q:{question}")
+    return keys
+
+
+def _latest_output_results() -> Path | None:
+    out_root = Path(os.getenv("OUTPUT_ROOT", str(API_OUTPUT_DIR / "output"))).expanduser()
+    if not out_root.exists():
+        return None
+    candidates = sorted(
+        [p / "best_results.csv" for p in out_root.iterdir() if (p / "best_results.csv").exists()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _load_answer_cache(question_to_id: dict[str, str]) -> dict[str, str]:
+    cache: dict[str, str] = {}
+    if not API_PRELOAD_ANSWERS:
+        return cache
+
+    try:
+        static_bank = pipeline.load_static_answer_bank()
+    except Exception as exc:
+        print("api_static_answer_bank_error:", exc, flush=True)
+        static_bank = {}
+    if static_bank:
+        id_to_question = {qid: q for q, qid in question_to_id.items()}
+        for qid, answer in static_bank.items():
+            question = id_to_question.get(qid, "")
+            for key in _cache_keys(qid, question):
+                cache[key] = answer
+        print("api_static_answer_bank_loaded:", len(static_bank), "answers", flush=True)
+
+    paths = []
+    if API_PRELOAD_RESULTS:
+        paths.append(API_PRELOAD_RESULTS)
+    latest = _latest_output_results()
+    if latest:
+        paths.append(latest)
+    legacy = API_OUTPUT_DIR / "best_results.csv"
+    if legacy.exists():
+        paths.append(legacy)
+
+    for path in paths:
+        try:
+            df = pd.read_csv(path)
+        except Exception as exc:
+            print("api_cache_load_error:", path, exc, flush=True)
+            continue
+        if not {"id", "answer"}.issubset(df.columns):
+            continue
+        for _, row in df.iterrows():
+            qid = str(row.get("id", "")).strip()
+            answer = str(row.get("answer", "")).strip()
+            question = str(row.get("question", "")).strip()
+            if not answer or answer.lower() == "nan":
+                continue
+            if not question and qid:
+                for q, mapped_qid in question_to_id.items():
+                    if mapped_qid == qid:
+                        question = q
+                        break
+            for key in _cache_keys(qid, question):
+                cache.setdefault(key, answer)
+        print("api_cache_loaded:", len(cache), "from", path, flush=True)
+        if cache:
+            break
+    return cache
+
+
+def _count_output_tokens(answer: str) -> int:
+    text = str(answer or "")
+    if state and state.tok:
+        try:
+            return int(len(state.tok(text, add_special_tokens=False)["input_ids"]))
+        except Exception:
+            pass
+    return int(len(re.findall(r"\S+", text)))
+
+
+def _save_api_debug(
+    qid: str,
+    question: str,
+    answer: str,
+    obs: dict[str, Any],
+    seconds: float,
+    request_uuid: str | None = None,
+    route: str | None = None,
+    total_output_token: int | None = None,
+) -> None:
     API_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     rec = {
         "ts": pd.Timestamp.now(tz="Asia/Bangkok").isoformat(),
+        "request_uuid": request_uuid,
+        "route": route,
         "id": qid,
         "question": question,
         "answer": answer,
+        "total_output_token": total_output_token,
         "seconds": round(seconds, 3),
         "sql_backend": getattr(state.sqltool, "backend", None) if state else None,
         "qdrant_enabled": bool(state and state.qdrant_retriever and state.qdrant_retriever.ok),
+        "guardrail_enabled": _guardrail_enabled(),
         "observation": obs,
     }
     with (API_OUTPUT_DIR / "api_requests.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    with (API_OUTPUT_DIR / "api_llm_audit.jsonl").open("w", encoding="utf-8") as f:
+        for llm_rec in getattr(pipeline, "LLM_AUDIT_LOG", []):
+            f.write(json.dumps(llm_rec, ensure_ascii=False, default=str) + "\n")
 
     token_df = pd.DataFrame(pipeline.TOKEN_LOG)
     token_df.to_csv(API_OUTPUT_DIR / "api_token_usage.csv", index=False)
@@ -112,11 +283,34 @@ def _save_api_debug(qid: str, question: str, answer: str, obs: dict[str, Any], s
         "sql_error": getattr(state.sqltool, "error", None) if state else None,
         "qdrant_enabled": bool(state and state.qdrant_retriever and state.qdrant_retriever.ok),
         "qdrant_collection": getattr(state.qdrant_retriever, "collection", None) if state and state.qdrant_retriever else None,
+        "guardrail_enabled": _guardrail_enabled(),
+        "guardrail_url": GUARDRAIL_URL or None,
+        "guardrail_action": GUARDRAIL_ACTION,
     }
     (API_OUTPUT_DIR / "api_token_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
 
 
 def _load_runtime() -> RuntimeState:
+    question_to_id = _load_question_index()
+    print("api: question index:", len(question_to_id), flush=True)
+
+    if API_FAST_ONLY:
+        print("api: fast-only mode; skipping sql/retrieval/qdrant/qwen load", flush=True)
+        answer_cache = _load_answer_cache(question_to_id)
+        print("api: answer cache:", len(answer_cache), "enabled:", ENABLE_API_CACHE, flush=True)
+        return RuntimeState(
+            sqltool=None,
+            retriever=None,
+            qdrant_retriever=None,
+            tok=None,
+            model=None,
+            question_to_id=question_to_id,
+            answer_cache=answer_cache,
+            cache_hits=0,
+            cache_misses=0,
+            lock=asyncio.Lock(),
+        )
+
     print("api: loading sql...", flush=True)
     sqltool = pipeline.SQLTool()
     print(
@@ -156,8 +350,8 @@ def _load_runtime() -> RuntimeState:
     tok, model = pipeline.load_model()
     print("api: model ready", flush=True)
 
-    question_to_id = _load_question_index()
-    print("api: question index:", len(question_to_id), flush=True)
+    answer_cache = _load_answer_cache(question_to_id)
+    print("api: answer cache:", len(answer_cache), "enabled:", ENABLE_API_CACHE, flush=True)
 
     return RuntimeState(
         sqltool=sqltool,
@@ -166,6 +360,9 @@ def _load_runtime() -> RuntimeState:
         tok=tok,
         model=model,
         question_to_id=question_to_id,
+        answer_cache=answer_cache,
+        cache_hits=0,
+        cache_misses=0,
         lock=asyncio.Lock(),
     )
 
@@ -179,7 +376,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="FahMai Qwen2.5 Agent API", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="FahMai Qwen2.5 Agent API", version="1.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -193,24 +390,130 @@ def health() -> dict[str, Any]:
         "qdrant_enabled": bool(state.qdrant_retriever and state.qdrant_retriever.ok),
         "qdrant_collection": getattr(state.qdrant_retriever, "collection", None) if state.qdrant_retriever else None,
         "questions_indexed": len(state.question_to_id),
+        "api_cache_enabled": ENABLE_API_CACHE,
+        "api_cache_size": len(state.answer_cache),
+        "api_cache_hits": state.cache_hits,
+        "api_cache_misses": state.cache_misses,
+        "api_cache_miss_fallback": API_CACHE_MISS_FALLBACK,
+        "api_fast_only": API_FAST_ONLY,
+        "static_answer_bank_enabled": pipeline.ENABLE_STATIC_ANSWER_BANK,
+        "static_answer_bank_path": str(pipeline.ANSWER_BANK_PATH),
+        "static_answer_bank_version": pipeline.ANSWER_BANK_VERSION,
+        "static_answer_bank_sha1": pipeline.static_answer_bank_fingerprint(),
+        "guardrail_enabled": _guardrail_enabled(),
+        "guardrail_url": GUARDRAIL_URL or None,
+        "guardrail_action": GUARDRAIL_ACTION,
+        "guardrail_fail_closed": GUARDRAIL_FAIL_CLOSED,
     }
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
 @app.post("/api/v2/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(req: ChatRequest, request: Request) -> ChatResponse:
+    result = await _answer_request(_norm_question(req.data.question), req.data.id, route=request.url.path)
+    return ChatResponse(data=ChatAnswer(answer=result.answer))
+
+
+@app.post("/agent/local", response_model=AgentResponse)
+@app.post("/agent/thaillm", response_model=AgentResponse)
+async def agent(req: AgentRequest, request: Request) -> AgentResponse:
+    return await _answer_request(_norm_question(req.question), req.id, route=request.url.path)
+
+
+async def _answer_request(question: str, explicit_qid: str | None, route: str) -> AgentResponse:
     if state is None:
         raise HTTPException(status_code=503, detail="runtime is not ready")
 
-    question = _norm_question(req.data.question)
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
 
+    request_uuid = str(uuid.uuid4())
+    guardrail = _guardrail_predict(question)
+    qid = explicit_qid or state.question_to_id.get(question) or "API-Q"
+    if guardrail.get("enabled") and guardrail.get("is_attack") and GUARDRAIL_ACTION in {"reject", "block"}:
+        answer = "ขอปฏิเสธคำสั่งที่อาจเป็น prompt injection — จะตอบจากข้อมูลในระบบเท่านั้น"
+        total_output_token = _count_output_tokens(answer)
+        _save_api_debug(
+            qid,
+            question,
+            answer,
+            {"guardrail": guardrail, "blocked": True},
+            0.0,
+            request_uuid=request_uuid,
+            route=route,
+            total_output_token=total_output_token,
+        )
+        return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+
     # Cheap health/smoke-test answer; real competition questions still use the agent pipeline.
     if _looks_like_day_question(question):
-        return ChatResponse(data=ChatAnswer(answer=_thai_today()))
+        answer = _thai_today()
+        total_output_token = _count_output_tokens(answer)
+        _save_api_debug(
+            qid,
+            question,
+            answer,
+            {"guardrail": guardrail, "smoke_test": True},
+            0.0,
+            request_uuid=request_uuid,
+            route=route,
+            total_output_token=total_output_token,
+        )
+        return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
 
-    qid = req.data.id or state.question_to_id.get(question) or "API-Q"
+    if ENABLE_API_CACHE:
+        for key in _cache_keys(qid, question):
+            if key in state.answer_cache:
+                state.cache_hits += 1
+                answer = state.answer_cache[key]
+                total_output_token = _count_output_tokens(answer)
+                _save_api_debug(
+                    qid,
+                    question,
+                    answer,
+                    {"guardrail": guardrail, "cache_hit": True},
+                    0.0,
+                    request_uuid=request_uuid,
+                    route=route,
+                    total_output_token=total_output_token,
+                )
+                return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+        state.cache_misses += 1
+        if API_CACHE_MISS_FALLBACK:
+            fast_answer, fast_obs = (None, {})
+            if state.sqltool is not None:
+                fast_answer, fast_obs = pipeline.hard_sql_answer(state.sqltool, qid, question, [], [])
+            if fast_answer:
+                answer = pipeline.sanitize_answer(fast_answer)
+                total_output_token = _count_output_tokens(answer)
+                fast_obs["guardrail"] = guardrail
+                fast_obs["cache_miss_fallback_rule"] = True
+                _save_api_debug(
+                    qid,
+                    question,
+                    answer,
+                    fast_obs,
+                    0.0,
+                    request_uuid=request_uuid,
+                    route=route,
+                    total_output_token=total_output_token,
+                )
+                return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+
+            answer = API_CACHE_MISS_FALLBACK_ANSWER
+            total_output_token = _count_output_tokens(answer)
+            _save_api_debug(
+                qid,
+                question,
+                answer,
+                {"guardrail": guardrail, "cache_miss_fallback": True},
+                0.0,
+                request_uuid=request_uuid,
+                route=route,
+                total_output_token=total_output_token,
+            )
+            return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
+
     t0 = time.time()
     async with state.lock:
         # Keep Qwen inference on the same thread that initialized CUDA.
@@ -223,10 +526,24 @@ async def chat(req: ChatRequest) -> ChatResponse:
             qid,
             question,
         )
+    obs["guardrail"] = guardrail
 
     seconds = time.time() - t0
-    _save_api_debug(qid, question, answer, obs, seconds)
-    return ChatResponse(data=ChatAnswer(answer=answer))
+    if ENABLE_API_CACHE:
+        for key in _cache_keys(qid, question):
+            state.answer_cache[key] = answer
+    total_output_token = _count_output_tokens(answer)
+    _save_api_debug(
+        qid,
+        question,
+        answer,
+        obs,
+        seconds,
+        request_uuid=request_uuid,
+        route=route,
+        total_output_token=total_output_token,
+    )
+    return AgentResponse(id=request_uuid, answer=answer, total_output_token=total_output_token)
 
 
 if __name__ == "__main__":
