@@ -1,12 +1,7 @@
 pandas>=2.0
-openpyxl>=3.1
 psycopg[binary]>=3.2
 qdrant-client>=1.11
 sentence-transformers>=3.0
-transformers>=4.56
-accelerate>=0.33
-torch
-tqdm>=4.66
 python-dotenv>=1.0
 fastapi>=0.115
 uvicorn[standard]>=0.30

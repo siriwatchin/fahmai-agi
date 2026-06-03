@@ -21,7 +21,7 @@ export PG_DSN="postgresql://USER:PASSWORD@HOST:PORT/DBNAME"
 export QDRANT_URL="http://HOST:6333"
 export QDRANT_API_KEY=""
 export QDRANT_COLLECTION="fahmai_public"
-export EMBED_MODEL="intfloat/multilingual-e5-base"
+export EMBED_MODEL="BAAI/bge-m3"
 ```
 
 ## Tool Categories
@@ -138,8 +138,10 @@ Qdrant is model-agnostic. Every LLM pipeline can use the same collection as long
 Recommended shared setup:
 
 - Collection name: `fahmai_public`
-- Embedding model: `intfloat/multilingual-e5-base`
+- Embedding model: `BAAI/bge-m3`
 - Payload fields: `text`, `path`, `source`, `chunk`
+
+Important: `BAAI/bge-m3` is used for vector embeddings/search only. It is not the generation LLM. Keep Qwen/Gemma/Typhoon model settings separate from `EMBED_MODEL`.
 
 Ingest once:
 

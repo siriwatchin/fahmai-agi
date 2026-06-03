@@ -81,6 +81,8 @@ def answer_one(pg: PostgresTool, vec: QdrantVectorTool, llm: QwenLocalLLM, qid: 
         for h in vector_hits
     ]
     prompt = f"""
+FINAL_ANSWER_MODE: OBSERVATIONS already include retrieved schema and vector evidence. Do not output tool-call JSON.
+
 ตอบจากข้อมูลใน OBSERVATIONS เท่านั้น
 กฎ:
 - ตอบภาษาไทย สั้น ตรงคำถาม
@@ -96,4 +98,3 @@ OBSERVATIONS:
 """.strip()
     ans = llm.generate(prompt, qid=qid, stage="rag_final", max_new_tokens=180)
     return ans, {"schema": schema, "vector": vector_context}
-

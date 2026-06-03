@@ -31,7 +31,7 @@ export PG_DSN="postgresql://USER:PASSWORD@HOST:PORT/DBNAME"
 export QDRANT_URL="http://HOST:6333"
 export QDRANT_API_KEY="..."
 export QDRANT_COLLECTION="fahmai_public"
-export EMBED_MODEL="intfloat/multilingual-e5-base"
+export EMBED_MODEL="BAAI/bge-m3"
 export QWEN_MODEL_PATH="$HOME/scamper_house/qwen35/models/Qwen2.5-7B-Instruct"
 export DATA_DIR="$HOME/scamper_house/fah-mai-the-finale-enterprise-data-agentic-showdown"
 export QUESTIONS_CSV="$HOME/scamper_house/questions.csv"
@@ -59,9 +59,84 @@ Outputs:
 - `outputs/qwen25_token_usage.csv`
 - `outputs/qwen25_token_summary.json`
 
+The integrated B200 runner also writes every run to a timestamped folder:
+
+```text
+$WORK_ROOT/output/<RUN_ID>/
+  best_results.csv
+  best_submission.csv
+  best_debug.json
+  best_token_usage.csv
+  best_token_summary.json
+```
+
+Set `RUN_ID`, `OUTPUT_ROOT`, or `RUN_OUTPUT_DIR` to customize the run folder.
+
 ## Notes
 
 - The pipeline prefers deterministic SQL when the question has clear table/field intent.
 - Qdrant is used for document snippets, logs, memos, refusal evidence, and schema-ish text.
+- `BAAI/bge-m3` is the required vector embedding/search model only. It is separate from the Qwen generation model.
 - The LLM is used as a final synthesizer, not as the primary calculator.
+- Qwen runs with a FahMai system prompt that enforces context-first tool use. When `OBSERVATIONS` are already supplied by the pipeline, it switches to final-answer mode and returns a concise Thai answer instead of tool-call JSON.
 
+## Run FastAPI Chat Server
+
+This wraps `agentic_best_integrated_qdrant.py`, which is the current B200 runner with SQL-first rules, Qdrant retrieval, and Qwen final answer generation.
+
+```bash
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+
+source ~/.fahmai_db_env 2>/dev/null || true
+
+# On B200, Postgres host currently times out. Use duckdb to start fast.
+# Switch to auto/postgres only when PG_DSN is reachable from B200.
+export SQL_BACKEND="duckdb"
+export ALLOW_SQL_FALLBACK="1"
+
+export QDRANT_URL="http://localhost:6333"
+export QDRANT_API_KEY="..."
+export QDRANT_COLLECTION="fahmai_rag_bge"
+export EMBED_MODEL="$HOME/bank500/qwen35/models/bge-m3"
+export API_OUTPUT_DIR="$HOME/bank500"
+export API_PORT="8888"
+
+pip install -U fastapi "uvicorn[standard]"
+
+uvicorn api_server:app --host 0.0.0.0 --port "$API_PORT"
+```
+
+Smoke test:
+
+```bash
+curl -s http://127.0.0.1:8888/health
+
+curl -s -X POST http://127.0.0.1:8888/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"question":"วันนี้วันอะไร"}}'
+
+curl -s -X POST http://127.0.0.1:8888/api/v2/chat \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"question":"วันนี้วันอะไร"}}'
+```
+
+API contract:
+
+```json
+{
+  "data": {
+    "question": "วันนี้วันอะไร"
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "answer": "วันอังคาร"
+  }
+}
+```

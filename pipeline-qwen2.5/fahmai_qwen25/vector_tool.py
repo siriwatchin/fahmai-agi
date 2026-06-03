@@ -8,14 +8,6 @@ from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, P
 from sentence_transformers import SentenceTransformer
 
 
-def embed_query_prefix(text: str) -> str:
-    return f"query: {text}"
-
-
-def embed_passage_prefix(text: str) -> str:
-    return f"passage: {text}"
-
-
 @dataclass
 class VectorSearchResult:
     score: float
@@ -26,8 +18,15 @@ class VectorSearchResult:
 class QdrantVectorTool:
     def __init__(self, url: str, api_key: str | None, collection: str, embed_model: str):
         self.collection = collection
-        self.client = QdrantClient(url=url, api_key=api_key)
-        self.encoder = SentenceTransformer(embed_model)
+        self.client = QdrantClient(url=url, api_key=api_key, timeout=15)
+        self.embed_model = embed_model
+        self._encoder = None
+
+    @property
+    def encoder(self):
+        if self._encoder is None:
+            self._encoder = SentenceTransformer(self.embed_model)
+        return self._encoder
 
     @property
     def dim(self) -> int:
@@ -39,11 +38,25 @@ class QdrantVectorTool:
             vectors_config=VectorParams(size=self.dim, distance=Distance.COSINE),
         )
 
+    def _vector_name(self) -> str | None:
+        try:
+            info = self.client.get_collection(self.collection)
+            vectors = info.config.params.vectors
+            if isinstance(vectors, dict):
+                names = list(vectors.keys())
+                return names[0] if names else None
+            if hasattr(vectors, "__root__") and isinstance(vectors.__root__, dict):
+                names = list(vectors.__root__.keys())
+                return names[0] if names else None
+        except Exception:
+            pass
+        return None
+
     def upsert_texts(self, records: list[dict[str, Any]], batch_size: int = 64) -> None:
         point_id = 0
         for i in range(0, len(records), batch_size):
             batch = records[i : i + batch_size]
-            texts = [embed_passage_prefix(r["text"]) for r in batch]
+            texts = [r["text"] for r in batch]
             vectors = self.encoder.encode(texts, normalize_embeddings=True, show_progress_bar=False).tolist()
             points = []
             for r, v in zip(batch, vectors):
@@ -55,21 +68,32 @@ class QdrantVectorTool:
             self.client.upsert(collection_name=self.collection, points=points)
 
     def search(self, query: str, top_k: int = 8, source: str | None = None) -> list[VectorSearchResult]:
-        vector = self.encoder.encode([embed_query_prefix(query)], normalize_embeddings=True)[0].tolist()
+        vector = self.encoder.encode([query], normalize_embeddings=True)[0].tolist()
         flt = None
         if source:
             flt = Filter(must=[FieldCondition(key="source", match=MatchValue(value=source))])
-        hits = self.client.search(
-            collection_name=self.collection,
-            query_vector=vector,
-            query_filter=flt,
-            limit=top_k,
-            with_payload=True,
-        )
+        vector_name = self._vector_name()
+        if hasattr(self.client, "search"):
+            hits = self.client.search(
+                collection_name=self.collection,
+                query_vector=(vector_name, vector) if vector_name else vector,
+                query_filter=flt,
+                limit=top_k,
+                with_payload=True,
+            )
+        else:
+            kwargs = {"using": vector_name} if vector_name else {}
+            hits = self.client.query_points(
+                collection_name=self.collection,
+                query=vector,
+                query_filter=flt,
+                limit=top_k,
+                with_payload=True,
+                **kwargs,
+            ).points
         out = []
         for h in hits:
             payload = dict(h.payload or {})
             text = str(payload.get("text", ""))
             out.append(VectorSearchResult(score=float(h.score), text=text, payload=payload))
         return out
-

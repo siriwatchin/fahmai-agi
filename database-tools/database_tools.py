@@ -79,7 +79,7 @@ class DbToolConfig:
             qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
             qdrant_api_key=os.getenv("QDRANT_API_KEY") or None,
             qdrant_collection=os.getenv("QDRANT_COLLECTION", "fahmai_public"),
-            embed_model=os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-base"),
+            embed_model=os.getenv("EMBED_MODEL", "BAAI/bge-m3"),
         )
 
 
@@ -278,11 +278,50 @@ class PostgresDatabaseTools:
 class QdrantDatabaseTools:
     def __init__(self, url: str, api_key: str | None, collection: str, embed_model: str):
         from qdrant_client import QdrantClient
-        from sentence_transformers import SentenceTransformer
 
         self.collection = collection
-        self.client = QdrantClient(url=url, api_key=api_key)
-        self.encoder = SentenceTransformer(embed_model)
+        self.embed_model = embed_model
+        self._encoder = None
+        self.client = QdrantClient(url=url, api_key=api_key, timeout=15)
+
+    @property
+    def encoder(self):
+        if self._encoder is None:
+            from sentence_transformers import SentenceTransformer
+
+            self._encoder = SentenceTransformer(self.embed_model)
+        return self._encoder
+
+    def _query_points(self, collection_name: str, vector: list[float], limit: int, vector_name: str | None = None):
+        if hasattr(self.client, "search"):
+            query_vector = (vector_name, vector) if vector_name else vector
+            return self.client.search(
+                collection_name=collection_name,
+                query_vector=query_vector,
+                limit=limit,
+                with_payload=True,
+            )
+        kwargs = {"using": vector_name} if vector_name else {}
+        response = self.client.query_points(
+            collection_name=collection_name,
+            query=vector,
+            limit=limit,
+            with_payload=True,
+            **kwargs,
+        )
+        return response.points
+
+    def _collection_vector_names(self, collection_name: str) -> list[str]:
+        try:
+            info = self.client.get_collection(collection_name)
+            vectors = info.config.params.vectors
+            if isinstance(vectors, dict):
+                return list(vectors.keys())
+            if hasattr(vectors, "__root__") and isinstance(vectors.__root__, dict):
+                return list(vectors.__root__.keys())
+        except Exception:
+            pass
+        return []
 
     def healthcheck(self) -> str:
         try:
@@ -312,7 +351,7 @@ class QdrantDatabaseTools:
             from qdrant_client.models import PointStruct
 
             points = []
-            texts = [f"passage: {str(r.get('text', ''))}" for r in records]
+            texts = [str(r.get("text", "")) for r in records]
             vectors = self.encoder.encode(texts, normalize_embeddings=True, show_progress_bar=False).tolist()
             for offset, (record, vector) in enumerate(zip(records, vectors)):
                 payload = dict(record)
@@ -324,13 +363,11 @@ class QdrantDatabaseTools:
 
     def search(self, query: str, top_k: int = 8, collection: str | None = None) -> str:
         try:
-            vector = self.encoder.encode([f"query: {query}"], normalize_embeddings=True)[0].tolist()
-            hits = self.client.search(
-                collection_name=collection or self.collection,
-                query_vector=vector,
-                limit=top_k,
-                with_payload=True,
-            )
+            vector = self.encoder.encode([query], normalize_embeddings=True)[0].tolist()
+            collection_name = collection or self.collection
+            vector_names = self._collection_vector_names(collection_name)
+            vector_name = vector_names[0] if vector_names else None
+            hits = self._query_points(collection_name, vector, top_k, vector_name=vector_name)
             rows = []
             for h in hits:
                 payload = dict(h.payload or {})
