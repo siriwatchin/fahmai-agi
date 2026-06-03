@@ -16,7 +16,9 @@ fi
 export SQL_BACKEND="postgres"
 export ALLOW_SQL_FALLBACK="${ALLOW_SQL_FALLBACK:-0}"
 export SOURCE_FAHMAI_DB_ENV="0"
-export PG_DSN="${PG_DSN:-postgresql://admin:scamper@localhost:5432/fahmai}"
+# Force local Postgres. ~/.fahmai_db_env may contain stale remote swarm-manager
+# DSNs, which time out from the B200 runtime.
+export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
 export PG_SCHEMA="${PG_SCHEMA:-public}"
 
 export WORK_ROOT="${WORK_ROOT:-$HOME/bank500}"
@@ -55,6 +57,7 @@ echo "Starting FahMai groundtruth-style model CSV run"
 echo "  limit: $LIMIT"
 echo "  sql_backend: $SQL_BACKEND"
 echo "  pg_dsn_set: $([ -n "${PG_DSN:-}" ] && echo yes || echo no)"
+echo "  pg_host: localhost:5432/fahmai"
 echo "  qdrant_url: ${QDRANT_URL:-disabled}"
 echo "  qdrant_collection: ${QDRANT_COLLECTION:-}"
 echo "  model_path: $MODEL_PATH"
