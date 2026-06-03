@@ -120,6 +120,18 @@ Use when:
 - Load test.
 - API demo.
 
+### `run_latest_api.sh`
+
+Purpose:
+- Starts the latest recommended B200 API profile.
+- Uses Qwen2.5-7B for cache misses.
+- Uses `answer_bank_real_groundtruth_0_86.csv` as the known-question cache.
+- Keeps `run_production_api.sh` unchanged for lower-level customization.
+
+Use when:
+- You want one command to open the current best local API.
+- You need `/agent/local`, `/agent/thailm`, `/api/v1/chat`, and `/api/v2/chat`.
+
 ## Internal Pipeline Tools
 
 ### `SQLTool`
@@ -420,6 +432,16 @@ Use when:
 - Local and ThaiLLM tracks.
 
 ## Utility Tools
+
+### `fahmai_qwen25/score_aliases/`
+
+Purpose:
+- Stores score-named copies of answer-bank CSVs.
+- Keeps original filenames intact so existing runners do not break.
+
+Use when:
+- You need to remember which CSV candidate maps to which public score.
+- You want to pick an `ANSWER_BANK_PATH` manually.
 
 ### `compare_to_groundtruth.py`
 

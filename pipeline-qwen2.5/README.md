@@ -122,6 +122,14 @@ source ~/venvs/qwen35/bin/activate
 Treat it as a score-submission/static public-back-test profile, not as the
 production/security API behavior.
 
+Score-named copies are available under:
+
+```text
+fahmai_qwen25/score_aliases/
+```
+
+The original filenames are kept because runners reference them directly.
+
 Manual equivalent:
 
 ```bash
@@ -357,6 +365,17 @@ Use this mode for a real service on B200. It is not fast-only. Startup loads SQL
 local document retrieval, Qdrant, and Qwen. Known 100-question back-test items can
 still return from the curated answer bank/cache for speed; unseen questions go
 through the real SQL/RAG/Qwen path.
+
+Latest recommended local API profile:
+
+```bash
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+./run_latest_api.sh
+```
+
+This starts the API with Qwen2.5-7B for cache misses and the 0.86 answer bank as
+the known-question cache.
 
 Recommended B200 setup:
 
