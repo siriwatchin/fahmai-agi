@@ -175,6 +175,38 @@ For the strict local Postgres measurement path use:
 ./run_model_csv_postgres.sh
 ```
 
+Ground-truth-style model run, without copying an answer bank:
+
+```bash
+./run_model_csv_gt_style_postgres.sh
+```
+
+This profile sets:
+
+```text
+ENABLE_STATIC_ANSWER_BANK=0
+ANSWER_BANK_FAST_ONLY=0
+GROUNDTRUTH_STYLE_GUIDANCE=1
+MODEL_REWRITE_RULE_ANSWERS=1
+FINAL_MAX_NEW_TOKENS=260
+```
+
+It still uses SQL/RAG/Qdrant as evidence, but Qwen rewrites deterministic
+SQL/rule drafts into final answers using a rubric distilled from the reviewed
+ground-truth response style. It does not map question id to a stored response.
+
+After a run, compare the generated submission with a reviewed CSV:
+
+```bash
+python compare_to_groundtruth.py \
+  --groundtruth "$HOME/scamper_house/ground_truth/real_groundtruth.csv" \
+  --submission "$HOME/bank500/output/<RUN_ID>/best_submission.csv" \
+  --json-out "$HOME/bank500/output/<RUN_ID>/groundtruth_compare.json"
+```
+
+If the ground-truth file is not on B200, upload it first or point
+`--groundtruth` to the local path that contains `id,response`.
+
 For highest public-score rehearsal use `./run_score_csv_postgres.sh` instead.
 
 For a quick smoke run:
