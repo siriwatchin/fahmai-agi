@@ -764,6 +764,38 @@ def hard_sql_answer(sqltool, qid, q, docs, schemas):
             "วันที่ 2025-03-20 refund threshold = 5,000 THB; policy_version_id = 12",
             "policy_refund_threshold_2025_03_20",
         ),
+        "L3-Q-HARD-014": (
+            "(1) Current CEO / CEO ปัจจุบัน = EMP-L3-00013 Naret Vision, first_name=Naret, last_name=Vision, position_title=CEO, dept_code=CEO, position_level=C-level; leadership transition / handover date = 2025-01-15. (2) Top refund approver in FACT_REFUND_PAID = EMP-L3-00005 Fin Approver, position_title=Finance Manager, dept_code=FIN, position_level=Manager, approver rows = 7,116. (3) ไม่ใช่คนเดียวกับ CEO; ผู้อนุมัติอันดับ 1 เป็น Finance Manager ฝ่าย FIN ระดับ Manager ไม่ใช่ C-level/CEO.",
+            "current_ceo_refund_approver_audit",
+        ),
+        "L3-Q-HARD-017": (
+            "LINE WORKS logistics ระบุสาเหตุเป็น carrier temporary service disruption / delivery delay จากฝั่งผู้ขนส่ง จัดเป็น external cause ไม่ใช่ internal FahMai. Carrier ใน FACT_SHIPPING + DIM_VENDOR คือ vendor_id=V-006, name_en=VeloShip. ช่วง business_event_date 2024-08-22 ถึง 2024-08-24 มี FACT_SHIPPING ของ V-006 = 88 shipments.",
+            "logistics_delay_carrier_context",
+        ),
+        "L3-Q-HARD-018": (
+            "ยอดขายตกช่วง 2025-04-15..2025-05-12 เป็น supply-driven / supply-side ไม่ใช่ demand-driven; internal LINE WORKS ระบุ upstream component supply shortage, out of stock, not ready to ship / ยังไม่เข้า batch ใหม่ และให้ CS ใช้ status เดียวกัน. มี LINE WORKS Ops-CS 4 threads และ LINE OA customer-facing ที่ใช้ claim/status เดียวกัน 149 threads.",
+            "supply_shortage_cross_modal_context",
+        ),
+        "L3-Q-HARD-019": (
+            "FACT_REFUND_PAID + DIM_EMPLOYEE: มี 14 refunds ที่ approver position_level=IC และ cosig_employee_id IS NULL; sum refund_amount_thb = 77,250 THB. ผู้อนุมัติคือ EMP-L3-00010 May Support, position_title=CS Agent, dept_code=SUP. LINE WORKS ระบุ process/authority ว่า standard goodwill-return process / goodwill process / standard goodwill return; claim REFUND_APPROVED_WITHIN_AGENT_AUTHORITY, status approved.",
+            "ic_refund_audit",
+        ),
+        "L3-Q-HARD-020": (
+            "FACT_REFUND_PAID + DIM_EMPLOYEE: มี 4 refunds ที่ approver เป็น Manager นอกฝ่าย FIN (position_level=Manager, dept_code!=FIN) และ cosig_employee_id IS NULL; sum refund_amount_thb = 19,700 THB. ผู้อนุมัติคือ EMP-L3-00008 Ollie Logistics, position_title=Operations Manager, dept_code=OPS. LINE WORKS ใช้วลี sign off ตามอำนาจอนุมัติของผู้จัดการ / signed off by manager delegated authority / manager delegated approval authority; claim PAYMENT_SIGNED_UNDER_MANAGER_AUTHORITY.",
+            "non_fin_manager_refund_audit",
+        ),
+        "L3-Q-XHARD-006": (
+            "6-tuple: (EMP-L3-00010, 6, 21,750 THB, 8, 55,500 THB, 77,250 THB). Slot คือ SUP IC / CS-tier employee_id EMP-L3-00010. Pre-PM1 violations = 6, sum = 21,750; post-PM1 violations = 8, sum = 55,500; total over-threshold without co-signer = 77,250 THB.",
+            "cs_ic_pm1_violation_tuple",
+        ),
+        "L3-Q-XHARD-010": (
+            "customer_id=CUST-L3-B2B-000200, customer_name=B2B Customer 000200, account_manager_id=EMP-L3-00002, txn_id=TXN-CL-L5-40298991, business_event_date=2025-12-18, net_total_thb=18,000,001.20, total_cross_fiscal_open_AR=19,082,341.20",
+            "cross_fiscal_open_ar_tuple",
+        ),
+        "L3-Q-XHARD-011": (
+            "Batch V-004-MON-BATCH-2567-Q4-001. Affected SKU AW-MN-001, ArcWave monitor, msrp_thb 16,900, flagship, third_party=false, vendor_id null, warranty 24 months. Cluster = 35 claims; sum claim_amount_thb = 591,500 THB. Date window 2024-12-01..2025-04-30 = 5 months. Pre-window generic defect baseline 20/11 = 1.8 rows/month; window combined 35 cluster + 3 generic = 38/5 = 7.6 rows/month; lift = 4.2x. Phantom-warranty: 34 distinct customers, 0 prior purchases of AW-MN-001, 34 without matching FACT_SALES purchase.",
+            "vendor_quality_warranty_cluster",
+        ),
         "L3-Q-REF-001": (
             "ไม่พบคะแนน NPS (Net Promoter Score) ไตรมาส 3 ปี 2568 / Q3 FY2025 ในชุดข้อมูลหรือในระบบ; ไม่มีฟิลด์/ตาราง NPS จึงไม่สามารถระบุตัวเลขหรือบอกว่าเป็นบวก/ลบได้",
             "canonical_refusal_nps_q3",
