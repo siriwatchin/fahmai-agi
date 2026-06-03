@@ -696,6 +696,25 @@ def load_model():
     return tok, model
 
 
+def model_input_device(model):
+    """Return the device expected by input_ids for normal and device_map models."""
+    try:
+        emb = model.get_input_embeddings()
+        if emb is not None and hasattr(emb, "weight"):
+            device = emb.weight.device
+            if device.type != "meta":
+                return device
+    except Exception:
+        pass
+    try:
+        device = next(model.parameters()).device
+        if device.type != "meta":
+            return device
+    except Exception:
+        pass
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
     text = tok.apply_chat_template(
         [
@@ -705,7 +724,8 @@ def gen(tok, model, prompt, qid=None, stage="llm", max_new_tokens=180):
         tokenize=False,
         add_generation_prompt=True,
     )
-    x = tok(text, return_tensors="pt", truncation=True, max_length=GEN_MAX_INPUT_TOKENS).to("cuda")
+    x = tok(text, return_tensors="pt", truncation=True, max_length=GEN_MAX_INPUT_TOKENS)
+    x = x.to(model_input_device(model))
     input_len = int(x["input_ids"].shape[-1])
     gen_kwargs = {
         "max_new_tokens": max_new_tokens,
