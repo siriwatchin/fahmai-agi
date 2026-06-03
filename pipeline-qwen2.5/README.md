@@ -72,6 +72,71 @@ $WORK_ROOT/output/<RUN_ID>/
 
 Set `RUN_ID`, `OUTPUT_ROOT`, or `RUN_OUTPUT_DIR` to customize the run folder.
 
+## Run Source + Security Pipeline
+
+`agentic_sourced_secure.py` is a separate wrapper around the current best
+pipeline. It keeps the same SQL-first / RAG fallback answer logic, then adds:
+
+- structured source attribution for SQL tables, rules, schema hits, TF-IDF docs, and Qdrant hits
+- prompt-injection detection on both the question and retrieved context
+- reasoning-trace leakage checks; public outputs do not expose chain-of-thought or raw prompt traces
+- role-based access-control hooks through `ACCESS_ROLE`
+- cross-source privilege metadata so lower-trust retrieved text cannot override SQL/rule evidence
+
+Run on B200:
+
+```bash
+cd ~/fahmai-agi/pipeline-qwen2.5
+source ~/venvs/qwen35/bin/activate
+
+export MODEL_PATH="$HOME/bank500/qwen35/models/Qwen2.5-7B-Instruct"
+export FAHMAI_SRC_ROOT="$HOME/scamper_house"
+export WORK_ROOT="$HOME/bank500"
+export SQL_BACKEND="duckdb"
+
+export QDRANT_URL="http://127.0.0.1:6333"
+export QDRANT_API_KEY="..."
+export QDRANT_COLLECTION="fahmai_rag_bge"
+export EMBED_MODEL="$HOME/bank500/qwen35/models/bge-m3"
+
+export MODEL_LOAD_STRATEGY="cuda_direct"
+export DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP="1"
+export GEN_DO_SAMPLE="0"
+export DOC_TOP_K="8"
+export QDRANT_TOP_K="8"
+export GEN_MAX_INPUT_TOKENS="7000"
+export TORCH_NUM_THREADS="1"
+
+python agentic_sourced_secure.py --limit 100 --skip-qdrant-preload
+```
+
+Outputs:
+
+```text
+$WORK_ROOT/output/<RUN_ID>_sourced_secure/
+  sourced_secure_results.csv
+  sourced_secure_submission.csv
+  sourced_secure_records.jsonl
+  sourced_secure_debug.json
+  sourced_secure_token_usage.csv
+  sourced_secure_summary.json
+```
+
+`sourced_secure_results.csv` is for quick review. `sourced_secure_records.jsonl`
+contains per-answer `sources` and `security` objects for downstream audit.
+`sourced_secure_debug.json` is redacted by default. To write raw observations for
+local debugging only, set `INCLUDE_RAW_DEBUG=1`.
+
+Access roles:
+
+```bash
+python agentic_sourced_secure.py --limit 10 --access-role public_competition
+python agentic_sourced_secure.py --limit 10 --access-role restricted_viewer
+```
+
+`public_competition` matches the Kaggle public data-lake setting. `restricted_viewer`
+is a smoke-test role that denies finance/HR domains and returns an access refusal.
+
 ## Notes
 
 - The pipeline prefers deterministic SQL when the question has clear table/field intent.
