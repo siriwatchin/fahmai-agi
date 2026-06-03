@@ -20,6 +20,7 @@ import agentic_best_integrated_qdrant as pipeline
 API_OUTPUT_DIR = Path(os.getenv("API_OUTPUT_DIR", str(Path.home() / "bank500")))
 NO_QDRANT = os.getenv("NO_QDRANT", "0").lower() in {"1", "true", "yes"}
 SKIP_QDRANT_PRELOAD = os.getenv("SKIP_QDRANT_PRELOAD", "0").lower() in {"1", "true", "yes"}
+API_PORT = int(os.getenv("API_PORT", "8888"))
 
 
 def _norm_question(text: str) -> str:
@@ -178,7 +179,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="FahMai Qwen2.5 Agent API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="FahMai Qwen2.5 Agent API", version="1.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -196,6 +197,7 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
+@app.post("/api/v2/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
     if state is None:
         raise HTTPException(status_code=503, detail="runtime is not ready")
@@ -225,3 +227,9 @@ async def chat(req: ChatRequest) -> ChatResponse:
     seconds = time.time() - t0
     _save_api_debug(qid, question, answer, obs, seconds)
     return ChatResponse(data=ChatAnswer(answer=answer))
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("api_server:app", host="0.0.0.0", port=API_PORT)

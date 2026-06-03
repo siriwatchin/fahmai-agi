@@ -83,21 +83,27 @@ export SQL_BACKEND="duckdb"
 export ALLOW_SQL_FALLBACK="1"
 
 export QDRANT_URL="http://localhost:6333"
+export QDRANT_API_KEY="..."
 export QDRANT_COLLECTION="fahmai_rag_bge"
 export EMBED_MODEL="$HOME/bank500/qwen35/models/bge-m3"
 export API_OUTPUT_DIR="$HOME/bank500"
+export API_PORT="8888"
 
 pip install -U fastapi "uvicorn[standard]"
 
-uvicorn api_server:app --host 0.0.0.0 --port 5555
+uvicorn api_server:app --host 0.0.0.0 --port "$API_PORT"
 ```
 
 Smoke test:
 
 ```bash
-curl -s http://127.0.0.1:5555/health
+curl -s http://127.0.0.1:8888/health
 
-curl -s -X POST http://127.0.0.1:5555/api/v1/chat \
+curl -s -X POST http://127.0.0.1:8888/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"question":"วันนี้วันอะไร"}}'
+
+curl -s -X POST http://127.0.0.1:8888/api/v2/chat \
   -H "Content-Type: application/json" \
   -d '{"data":{"question":"วันนี้วันอะไร"}}'
 ```
