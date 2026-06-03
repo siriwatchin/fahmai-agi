@@ -45,6 +45,10 @@ QDRANT_TOP_K = int(os.getenv("QDRANT_TOP_K", "8"))
 ENABLE_HYBRID_RRF = os.getenv("ENABLE_HYBRID_RRF", "1").lower() not in {"0", "false", "no"}
 HYBRID_TOP_K = int(os.getenv("HYBRID_TOP_K", "8"))
 RRF_K = int(os.getenv("RRF_K", "60"))
+ENABLE_CROSS_SOURCE_LOOKUP = os.getenv("ENABLE_CROSS_SOURCE_LOOKUP", "1").lower() not in {"0", "false", "no"}
+CROSS_SOURCE_MAX_ENTITIES = int(os.getenv("CROSS_SOURCE_MAX_ENTITIES", "10"))
+CROSS_SOURCE_MAX_QUERIES = int(os.getenv("CROSS_SOURCE_MAX_QUERIES", "16"))
+CROSS_SOURCE_ROW_LIMIT = int(os.getenv("CROSS_SOURCE_ROW_LIMIT", "5"))
 GEN_MAX_INPUT_TOKENS = int(os.getenv("GEN_MAX_INPUT_TOKENS", "7000"))
 GEN_DO_SAMPLE = os.getenv("GEN_DO_SAMPLE", "0").lower() in {"1", "true", "yes"}
 GEN_TEMPERATURE = float(os.getenv("GEN_TEMPERATURE", "0.7"))
@@ -944,6 +948,188 @@ def build_hybrid_evidence_pack(tfidf_docs, qdrant_docs, top_k=HYBRID_TOP_K):
         ok=True,
         seconds=time.time() - t0,
         meta={"rrf_k": RRF_K},
+    )
+    return result
+
+
+ENTITY_ID_RE = re.compile(
+    r"""
+    \b(?:EMP-L3-\d{5}|CUST-L3-[A-Z0-9-]+|SKU-[A-Z0-9-]+|V-\d{3}|VP-\d+-\d+|BT-\d+-\d+|TXN-\d+-\d+|RFD-[A-Z0-9-]+)\b
+    |\b(?:POL|MIN|M|DOC|OCR|INV|PO|CASE|TICKET|LWT|EMAIL)-[A-Z0-9-]+(?:-[A-Z0-9-]+)*\b
+    |\b(?:NT|AW|DN|PC|FM|SKU)-[A-Z0-9]+(?:-[A-Z0-9]+)*\b
+    """,
+    re.X | re.I,
+)
+
+
+def _sql_quote_ident(name):
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _sql_quote_literal(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _doc_text(hit):
+    if isinstance(hit, dict):
+        return " ".join(
+            str(hit.get(k, ""))
+            for k in ["text", "path", "title", "doc_type", "date"]
+            if hit.get(k) is not None
+        )
+    return str(hit or "")
+
+
+def extract_cross_source_entities(question, docs, qdrant_docs, evidence_pack, max_entities=CROSS_SOURCE_MAX_ENTITIES):
+    """Extract stable ids from user question and retrieved long-text evidence.
+
+    The ids are used only as bridge keys for exact SQL lookup. This keeps
+    vector retrieval responsible for finding documents/entities, while SQL
+    remains responsible for exact facts and counts.
+    """
+    t0 = time.time()
+    chunks = [str(question or "")]
+    for group in [docs or [], qdrant_docs or [], evidence_pack or []]:
+        for hit in group[: max(3, max_entities)]:
+            chunks.append(_doc_text(hit)[:3000])
+    blob = "\n".join(chunks)
+    entities = []
+    seen = set()
+    for m in ENTITY_ID_RE.finditer(blob):
+        ent = m.group(0).strip().upper()
+        if len(ent) < 3 or ent in seen:
+            continue
+        seen.add(ent)
+        entities.append(ent)
+        if len(entities) >= max_entities:
+            break
+    log_tool_call(
+        "cross_source_entity_resolver",
+        action="extract_entities",
+        input_obj={"question": question, "doc_count": len(docs or []), "qdrant_count": len(qdrant_docs or [])},
+        output_obj={"entities": entities, "count": len(entities)},
+        ok=True,
+        seconds=time.time() - t0,
+        meta={"max_entities": max_entities},
+    )
+    return entities
+
+
+def _entity_column_score(entity, table_name, column_name):
+    table = str(table_name or "").upper()
+    col = str(column_name or "").lower()
+    ent = str(entity or "").upper()
+    score = 0
+
+    if ent.startswith("EMP-"):
+        score += 80 if "employee" in col else 0
+    if ent.startswith("CUST-"):
+        score += 80 if "customer" in col else 0
+    if ent.startswith("SKU-") or re.match(r"^(NT|AW|DN|PC|FM)-", ent):
+        score += 80 if "sku" in col or "product" in col else 0
+    if re.match(r"^V-\d{3}$", ent):
+        score += 80 if "vendor" in col else 0
+    if ent.startswith("VP-"):
+        score += 60 if "payment" in col or "vendor" in col else 0
+    if ent.startswith("TXN-"):
+        score += 80 if "txn" in col or "transaction" in col else 0
+    if ent.startswith("RFD-"):
+        score += 80 if "refund" in col else 0
+    if ent.startswith("POL-"):
+        score += 80 if "policy" in col or "version" in col else 0
+    if ent.startswith("INV-"):
+        score += 70 if "invoice" in col else 0
+    if ent.startswith("M-"):
+        score += 65 if "message" in col or "thread" in col else 0
+    if ent.startswith("OCR-") or ent.startswith("DOC-"):
+        score += 55 if any(x in col for x in ["doc", "file", "ocr", "render"]) else 0
+
+    if col.endswith("_id") or col == "id" or "id" in col:
+        score += 20
+    if any(x in col for x in ["code", "ref", "number", "filename", "tracking"]):
+        score += 10
+    if any(x in table for x in ["FACT", "DIM"]):
+        score += 4
+    return score
+
+
+def _candidate_entity_columns(sqltool, entity, max_columns=10):
+    candidates = []
+    for key, meta in (sqltool.tables or {}).items():
+        for col in meta.get("columns", []) or []:
+            col_name = col.get("column_name")
+            if not col_name:
+                continue
+            score = _entity_column_score(entity, meta.get("table") or key, col_name)
+            if score > 0:
+                candidates.append((score, key, meta, col_name))
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[:max_columns]
+
+
+def cross_source_sql_lookup(sqltool, question, docs, qdrant_docs, evidence_pack):
+    """Bridge vector/doc hits into exact SQL rows by resolving entity ids.
+
+    This is a bounded multi-hop tool layer:
+    long text/vector evidence -> entity ids -> SQL exact lookup.
+    It is deliberately conservative to protect latency and avoid exploratory
+    scans during load tests.
+    """
+    t0 = time.time()
+    if not ENABLE_CROSS_SOURCE_LOOKUP:
+        log_tool_call(
+            "cross_source_sql_lookup",
+            action="disabled",
+            input_obj={"question": question},
+            output_obj={"enabled": False},
+            ok=True,
+            seconds=time.time() - t0,
+        )
+        return {"enabled": False, "entities": [], "lookups": []}
+
+    entities = extract_cross_source_entities(question, docs, qdrant_docs, evidence_pack)
+    lookups = []
+    query_count = 0
+    for ent in entities:
+        for _, table_key, meta, col_name in _candidate_entity_columns(sqltool, ent):
+            if query_count >= CROSS_SOURCE_MAX_QUERIES:
+                break
+            table = sqltool.table_ref(table_key)
+            col = _sql_quote_ident(col_name)
+            sql = f"SELECT * FROM {table} WHERE CAST({col} AS VARCHAR) = {_sql_quote_literal(ent)} LIMIT {CROSS_SOURCE_ROW_LIMIT}"
+            res = sqltool.query(sql)
+            query_count += 1
+            if res.get("ok") and res.get("rows"):
+                lookups.append(
+                    {
+                        "entity": ent,
+                        "table": meta.get("table") or table_key,
+                        "path": meta.get("path"),
+                        "column": col_name,
+                        "row_count": len(res.get("rows") or []),
+                        "rows": res.get("rows", [])[:CROSS_SOURCE_ROW_LIMIT],
+                        "sql": res.get("sql", sql),
+                    }
+                )
+                break
+        if query_count >= CROSS_SOURCE_MAX_QUERIES:
+            break
+
+    result = {
+        "enabled": True,
+        "entities": entities,
+        "lookups": lookups,
+        "query_count": query_count,
+        "max_queries": CROSS_SOURCE_MAX_QUERIES,
+    }
+    log_tool_call(
+        "cross_source_sql_lookup",
+        action="vector_entity_to_sql",
+        input_obj={"question": question, "entities": entities},
+        output_obj={"lookup_count": len(lookups), "lookups": lookups},
+        ok=True,
+        seconds=time.time() - t0,
+        meta={"max_queries": CROSS_SOURCE_MAX_QUERIES, "row_limit": CROSS_SOURCE_ROW_LIMIT},
     )
     return result
 
@@ -2659,10 +2845,12 @@ def answer_one(sqltool, retriever, qdrant_retriever, tok, model, qid, q):
 
     qdrant_docs = qdrant_retriever.search(q, QDRANT_TOP_K) if qdrant_retriever else []
     evidence_pack = build_hybrid_evidence_pack(docs, qdrant_docs)
+    cross_source_context = cross_source_sql_lookup(sqltool, q, docs, qdrant_docs, evidence_pack)
     style = style_guidance_for(qid)
     style_block = f"\nSTYLE_GUIDE:\n{style}\n" if style else ""
     obs_payload = {
         "evidence_pack": evidence_pack,
+        "cross_source_lookup": cross_source_context,
         "document_search": docs,
         "qdrant_search": qdrant_docs,
         "schema_search": schemas,
@@ -2675,6 +2863,7 @@ FINAL_ANSWER_MODE: OBSERVATIONS already include retrieved schema and document ev
 กฎ:
 - ตอบภาษาไทย สั้น ตรงคำถาม
 - ใช้ evidence_pack ก่อน เพราะรวม TF-IDF และ Qdrant ด้วย reciprocal-rank fusion
+- ถ้า cross_source_lookup มี rows ให้ใช้เป็นหลักฐาน SQL ที่ resolve จาก entity ในเอกสาร/vector
 - ถ้าหลักฐาน SQL/rule ขัดกับเอกสาร ให้เชื่อ SQL/rule ที่มีค่าเฉพาะเจาะจงกว่า
 - ถ้าข้อมูลไม่พอ ให้ตอบรูปแบบ: ไม่พบ <หัวข้อ> ในชุดข้อมูล
 - ห้ามเดาค่าตัวเลขเอง
@@ -2691,10 +2880,12 @@ OBSERVATIONS:
     answer = gen(tok, model, prompt, qid=qid, stage="final_answer", max_new_tokens=FINAL_MAX_NEW_TOKENS)
     return guard_final_answer(qid, q, answer), {
         "evidence_pack": evidence_pack,
+        "cross_source_lookup": cross_source_context,
         "document_search": docs,
         "qdrant_search": qdrant_docs,
         "schema_search": schemas,
         "hybrid_rrf_enabled": ENABLE_HYBRID_RRF,
+        "cross_source_lookup_enabled": ENABLE_CROSS_SOURCE_LOOKUP,
     }
 
 
@@ -2745,6 +2936,10 @@ def save_outputs(rows, debug, sqltool, qdrant_retriever, run_t0, out_dir=RUN_OUT
         "hybrid_rrf_enabled": ENABLE_HYBRID_RRF,
         "hybrid_top_k": HYBRID_TOP_K,
         "rrf_k": RRF_K,
+        "cross_source_lookup_enabled": ENABLE_CROSS_SOURCE_LOOKUP,
+        "cross_source_max_entities": CROSS_SOURCE_MAX_ENTITIES,
+        "cross_source_max_queries": CROSS_SOURCE_MAX_QUERIES,
+        "cross_source_row_limit": CROSS_SOURCE_ROW_LIMIT,
         "gen_max_input_tokens": GEN_MAX_INPUT_TOKENS,
         "final_max_new_tokens": FINAL_MAX_NEW_TOKENS,
         "sanitize_max_chars": SANITIZE_MAX_CHARS,

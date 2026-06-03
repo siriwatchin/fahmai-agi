@@ -280,6 +280,45 @@ Tradeoff:
 - Slightly larger debug/prompt payload on cache misses.
 - No cost for fully cached known-question fast mode.
 
+### `cross_source_sql_lookup`
+
+Location:
+- `agentic_best_integrated_qdrant.py`
+
+Purpose:
+- Bounded multi-hop bridge from long-text/vector evidence into exact SQL rows.
+- Extracts stable ids from the question, TF-IDF docs, Qdrant hits, and fused
+  evidence, then probes likely SQL columns using `SQLTool`.
+- Records every step in tool audit so the answer can show both document/vector
+  discovery evidence and exact table evidence.
+
+Use when:
+- A question needs information from non-tabular text first, then an exact table
+  lookup, for example OCR invoice -> `invoice_id` -> payment table.
+- A vector hit mentions a `vendor_id`, `customer_id`, `sku_id`,
+  `employee_id`, `policy_version_id`, or message/document id that must be
+  verified in PostgreSQL/DuckDB.
+- The answer needs cross-source provenance instead of relying on vector text
+  alone.
+
+Key env:
+- `ENABLE_CROSS_SOURCE_LOOKUP=1`
+- `CROSS_SOURCE_MAX_ENTITIES=10`
+- `CROSS_SOURCE_MAX_QUERIES=16`
+- `CROSS_SOURCE_ROW_LIMIT=5`
+
+Audit/source behavior:
+- `cross_source_entity_resolver` logs extracted bridge ids.
+- `cross_source_sql_lookup` logs resolved table/column hits.
+- Individual SQL probes are also logged as `sql_query`.
+- API `sources` can include `cross_source_sql` entries with entity, table,
+  column, row count, and query hash.
+
+Tradeoff:
+- Improves hard/OCR/policy/chat questions that need vector -> SQL evidence.
+- Adds bounded SQL probes only on fallback/cache-miss paths, not on static
+  answer-bank fast mode.
+
 ### `hard_sql_answer`
 
 Location:

@@ -775,8 +775,20 @@ api_tool_summary.json
 question id, latency, estimated input/output tokens, hashes, and redacted
 previews. `api_tool_summary.json` aggregates call count, seconds, and token
 estimates per tool/action. This includes cache lookup, SQL, TF-IDF, Qdrant,
-hybrid RRF, and LLM generation when those paths are used. External guardrail is
-not part of the default pipeline or API response spec.
+hybrid RRF, cross-source entity-to-SQL lookup, and LLM generation when those
+paths are used. External guardrail is not part of the default pipeline or API
+response spec.
+
+Cross-source evidence:
+
+- `ENABLE_CROSS_SOURCE_LOOKUP=1` enables bounded multi-hop lookup on fallback
+  paths.
+- The pipeline extracts stable ids from TF-IDF/Qdrant/evidence_pack, then probes
+  likely SQL columns with `SQLTool`.
+- API sources may include `cross_source_sql` entries showing the resolved
+  entity, SQL table, column, row count, and query hash.
+- This is designed for questions where vector/OCR/chat evidence discovers an
+  entity, but PostgreSQL/DuckDB must verify the exact fact.
 
 Response behavior:
 

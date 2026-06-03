@@ -395,6 +395,27 @@ def _extract_sources(obs: dict[str, Any] | None, limit: int = 8) -> list[dict[st
             }
         )
 
+    cross_source = obs.get("cross_source_lookup") or {}
+    if isinstance(cross_source, dict):
+        for hit in cross_source.get("lookups", []) or []:
+            if not isinstance(hit, dict):
+                continue
+            sources.append(
+                {
+                    "type": "cross_source_sql",
+                    "backend": getattr(state.sqltool, "backend", None) if state else None,
+                    "entity": hit.get("entity"),
+                    "table": hit.get("table"),
+                    "path": hit.get("path"),
+                    "column": hit.get("column"),
+                    "row_count": hit.get("row_count"),
+                    "query_hash": pipeline._sha1_short(hit.get("sql")),
+                    "preview": pipeline._redact_for_audit(hit.get("sql"), limit=260),
+                }
+            )
+            if len(sources) >= limit:
+                break
+
     for key in ["evidence_pack", "qdrant_search", "document_search"]:
         for hit in obs.get(key, []) or []:
             if not isinstance(hit, dict):

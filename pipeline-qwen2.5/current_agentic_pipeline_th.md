@@ -68,6 +68,7 @@ question
   -> ถ้ายังตอบไม่ได้: TF-IDF document search + schema search
   -> hard SQL rules อีกครั้งพร้อม context
   -> Qdrant BGE-M3 vector retrieval
+  -> cross-source entity lookup: vector/doc evidence -> entity id -> SQL exact rows
   -> Qwen2.5-7B final answer เฉพาะข้อที่ยังต้อง synthesize
   -> token/time/audit/debug outputs
 ```
@@ -77,6 +78,7 @@ question
 - ใช้ SQL/rule ก่อนเสมอสำหรับคำถามตัวเลข ตาราง count, group by, join, date, policy
 - ไม่เรียก TF-IDF/Qdrant ก่อนถ้า deterministic rule ตอบได้
 - ใช้ Qwen เป็น final synthesizer ไม่ใช่เครื่องคิดเลขหลัก
+- ใช้ Qdrant/TF-IDF เพื่อหาเอกสารและ entity จากข้อความยาว แล้วใช้ SQL ยืนยันตัวเลข/id ที่ exact
 - ใช้ `GEN_DO_SAMPLE=0` เพื่อคำตอบนิ่งและเหมาะกับ keyword grader
 - ใช้ `MODEL_LOAD_STRATEGY=cuda_direct` บน B200 เมื่อโหลดผ่านแล้ว
 
@@ -98,6 +100,9 @@ export QDRANT_URL="http://127.0.0.1:6333"
 export QDRANT_API_KEY="<qdrant-key>"
 export QDRANT_COLLECTION="fahmai_rag_bge"
 export EMBED_MODEL="$HOME/bank500/qwen35/models/bge-m3"
+export ENABLE_CROSS_SOURCE_LOOKUP="1"
+export CROSS_SOURCE_MAX_ENTITIES="10"
+export CROSS_SOURCE_MAX_QUERIES="16"
 
 export MODEL_LOAD_STRATEGY="cuda_direct"
 export DISABLE_TRANSFORMERS_ALLOCATOR_WARMUP="1"
@@ -122,6 +127,8 @@ Output ของแต่ละ run:
   best_token_usage.csv
   best_token_summary.json
   best_llm_audit.jsonl
+  best_tool_audit.jsonl
+  best_tool_summary.json
 ```
 
 ## Source + Security Pipeline
