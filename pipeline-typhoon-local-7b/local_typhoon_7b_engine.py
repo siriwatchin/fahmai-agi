@@ -103,19 +103,69 @@ def _is_product_value_question(messages: list[dict[str, Any]]) -> bool:
     )
 
 
+def _needs_parameter_guidance(messages: list[dict[str, Any]]) -> bool:
+    text = _message_content(messages).lower()
+    markers = [
+        "policy",
+        "นโยบาย",
+        "refund",
+        "return",
+        "threshold",
+        "points",
+        "top sku",
+        "stockout",
+        "shipping",
+        "partner brand",
+        "loyalty",
+        "ceo",
+        "vendor",
+        "customer",
+        "branch",
+        "employee",
+        "sku",
+        "สินค้า",
+    ]
+    return any(marker in text for marker in markers)
+
+
 def _with_7b_tool_fewshot(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not _is_product_value_question(messages):
+    if not _needs_parameter_guidance(messages):
         return messages
-    guidance = (
-        "7B TOOL ROUTING FEW-SHOT:\n"
-        "For product code/SKU value questions, do NOT use retrieval, qdrant, or document search first.\n"
-        "Extract the SKU exactly from the user question, then call postgres_execute_readonly_sql.\n"
-        "Example question: MSRP ของสินค้ารหัส NT-LT-001 เป็นเท่าไหร่ครับ\n"
-        "Correct first tool call JSON:\n"
-        "{\"name\":\"postgres_execute_readonly_sql\",\"arguments\":{\"sql\":\"SELECT sku_id, msrp_thb FROM public.\\\"DIM_PRODUCT\\\" WHERE upper(trim(sku_id::text)) = upper('NT-LT-001') LIMIT 1\",\"limit\":1}}\n"
-        "If exact format may differ, normalize with regexp_replace(upper(sku_id::text), '[^A-Z0-9]', '', 'g').\n"
-        "After TOOL_RESULT rows are available, answer from those rows only in Thai plain text."
-    )
+    examples = [
+        "GENERAL PARAMETER RULES:",
+        "- Do not pass the full Thai question as a tool parameter unless the tool explicitly wants `question` or `query`.",
+        "- Extract IDs, dates, years, policy variables, and entity types first.",
+        "- Prefer exact domain tools or read-only SQL before document retrieval for structured facts.",
+    ]
+    if _is_product_value_question(messages):
+        examples.extend([
+            "",
+            "SKU/MSRP example:",
+            "Question: MSRP ของสินค้ารหัส NT-LT-001 เป็นเท่าไหร่ครับ",
+            "First tool JSON:",
+            "{\"name\":\"postgres_execute_readonly_sql\",\"arguments\":{\"sql\":\"SELECT sku_id, msrp_thb FROM public.\\\"DIM_PRODUCT\\\" WHERE upper(trim(sku_id::text)) = upper('NT-LT-001') LIMIT 1\",\"limit\":1}}",
+        ])
+    examples.extend([
+        "",
+        "Policy examples:",
+        "Return window as of 2024-12-15 -> {\"name\":\"domain_policy_resolver\",\"arguments\":{\"policy_variable\":\"return_window_days\",\"as_of_date\":\"2024-12-15\"}}",
+        "Refund threshold as of 2025-04-01 -> {\"name\":\"domain_policy_resolver\",\"arguments\":{\"policy_variable\":\"refund_threshold_thb\",\"as_of_date\":\"2025-04-01\"}}",
+        "Point rate -> {\"name\":\"domain_policy_resolver\",\"arguments\":{\"policy_variable\":\"point_earning_rate_per_thb\",\"as_of_date\":\"2025-04-01\"}}",
+        "",
+        "Year/ranking examples:",
+        "Top SKU by units in 2024 -> {\"name\":\"domain_top_sku_by_units\",\"arguments\":{\"year\":2024}}",
+        "Most stockout SKU in 2025 -> {\"name\":\"domain_stockout_top_sku\",\"arguments\":{\"year\":2025}}",
+        "",
+        "Entity/domain examples:",
+        "Current CEO -> {\"name\":\"domain_current_ceo\",\"arguments\":{\"as_of_date\":\"2025-06-01\"}}",
+        "Shipping vendor share -> {\"name\":\"domain_shipping_vendor_share\",\"arguments\":{}}",
+        "Partner brand vendors -> {\"name\":\"domain_partner_brand_vendors\",\"arguments\":{}}",
+        "Customer loyalty tier counts -> {\"name\":\"domain_customer_loyalty_counts\",\"arguments\":{}}",
+        "",
+        "Only use domain_evidence_pack/qdrant/domain_hybrid_search for document, memo, OCR, chat, report, or source-text questions.",
+        "After TOOL_RESULT rows are available, answer from those rows only in Thai plain text.",
+    ])
+    guidance = "7B TOOL PARAMETER ROUTING FEW-SHOT:\n" + "\n".join(examples)
     if messages and messages[0].get("role") == "system":
         out = [dict(messages[0])]
         out[0]["content"] = f"{guidance}\n\n{out[0].get('content') or ''}"

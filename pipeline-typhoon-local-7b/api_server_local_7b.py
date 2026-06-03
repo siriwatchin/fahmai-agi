@@ -217,6 +217,78 @@ def _is_msrp_question(question: str) -> bool:
     return any(word in q for word in ["msrp", "ราคา", "เท่าไหร่"])
 
 
+def _extract_years(question: str) -> list[int]:
+    text = str(question or "")
+    years = [int(y) for y in re.findall(r"\b(20\d{2})\b", text)]
+    thai_years = [int(y) - 543 for y in re.findall(r"\b(25[6-7]\d)\b", text)]
+    out: list[int] = []
+    for year in years + thai_years:
+        if 2020 <= year <= 2030 and year not in out:
+            out.append(year)
+    return out
+
+
+def _extract_iso_date(question: str) -> str | None:
+    match = re.search(r"\b(20\d{2})-(\d{2})-(\d{2})\b", str(question or ""))
+    if match:
+        return match.group(0)
+    return None
+
+
+def _policy_args_from_question(question: str) -> dict[str, str] | None:
+    q = str(question or "").lower()
+    as_of = _extract_iso_date(question)
+    if "return_window" in q or "คืนสินค้า" in q or "return window" in q:
+        return {"policy_variable": "return_window_days", "as_of_date": as_of or "2024-12-15"}
+    if "refund_threshold" in q or "threshold" in q:
+        return {"policy_variable": "refund_threshold_thb", "as_of_date": as_of or "2025-04-01"}
+    if "point_earning_rate" in q or "points" in q or "สะสม" in q:
+        return {"policy_variable": "point_earning_rate_per_thb", "as_of_date": as_of or "2025-04-01"}
+    if "signing" in q or "authority" in q or "อนุมัติ" in q:
+        return {"policy_variable": "refund_signing_authority_ladder", "as_of_date": as_of or "2025-04-01"}
+    return None
+
+
+def _domain_query_candidates(question: str) -> list[tuple[str, dict[str, Any]]]:
+    q = str(question or "").lower()
+    candidates: list[tuple[str, dict[str, Any]]] = []
+
+    policy_args = _policy_args_from_question(question)
+    if policy_args:
+        candidates.append(("domain_policy_resolver", policy_args))
+
+    years = _extract_years(question)
+    if "top" in q and ("sku" in q or "สินค้า" in q) and ("unit" in q or "ขาย" in q):
+        for year in years or [2024, 2025]:
+            candidates.append(("domain_top_sku_by_units", {"year": year}))
+    if "stockout" in q or "สต็อก" in q or "ขาด stock" in q:
+        candidates.append(("domain_stockout_top_sku", {"year": (years or [2025])[-1]}))
+    if "ceo" in q or "ผู้บริหาร" in q:
+        candidates.append(("domain_current_ceo", {"as_of_date": _extract_iso_date(question) or "2025-06-01"}))
+    if "shipping" in q or "ขนส่ง" in q:
+        candidates.append(("domain_shipping_vendor_share", {}))
+    if "partner brand" in q:
+        candidates.append(("domain_partner_brand_vendors", {}))
+    if "loyalty" in q and ("count" in q or "จำนวน" in q or "tier" in q):
+        candidates.append(("domain_customer_loyalty_counts", {}))
+
+    entity_type = None
+    if "vendor" in q:
+        entity_type = "vendor"
+    elif "customer" in q or "ลูกค้า" in q:
+        entity_type = "customer"
+    elif "employee" in q or "พนักงาน" in q:
+        entity_type = "employee"
+    elif "branch" in q or "สาขา" in q:
+        entity_type = "branch"
+    elif "sku" in q or "สินค้า" in q:
+        entity_type = "sku"
+    if entity_type:
+        candidates.append(("domain_entity_resolver", {"query": question, "entity_type": entity_type, "limit": 10}))
+
+    return candidates
+
+
 def _sql_literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
@@ -276,6 +348,7 @@ def _preflight_evidence_trace(question: str) -> list[dict[str, Any]]:
             ("postgres_execute_readonly_sql", {"sql": sql, "limit": 1})
             for sql in _product_msrp_sql_candidates(sku)
         )
+    candidates.extend(_domain_query_candidates(question))
     candidates.extend([
         ("domain_evidence_pack", {"question": question, "top_k": 5}),
         ("postgres_search_schema", {"query": question, "schema": "public"}),
