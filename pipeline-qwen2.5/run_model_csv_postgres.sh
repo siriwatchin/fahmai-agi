@@ -20,7 +20,7 @@ export SOURCE_FAHMAI_DB_ENV="0"
 export PG_DSN="postgresql://admin:scamper@localhost:5432/fahmai"
 export PG_SCHEMA="${PG_SCHEMA:-public}"
 export QDRANT_URL="http://127.0.0.1:6333"
-export EMBED_MODEL="${EMBED_MODEL:-$HOME/bank500/qwen35/models/bge-m3}"
+export EMBED_MODEL="$HOME/bank500/qwen35/models/bge-m3"
 export NO_QDRANT="0"
 export SKIP_QDRANT_PRELOAD="${SKIP_QDRANT_PRELOAD:-0}"
 

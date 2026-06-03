@@ -254,6 +254,7 @@ class SQLTool:
         self.pg = psycopg
         self.pg_dict_row = dict_row
         self.con = psycopg.connect(self.pg_dsn, row_factory=dict_row)
+        self.con.autocommit = True
         with self.con.cursor() as cur:
             cur.execute("SET statement_timeout = '45s'")
 
@@ -354,6 +355,11 @@ class SQLTool:
             df = self.con.execute(sql).df()
             return {"ok": True, "shape": list(df.shape), "rows": df.head(200).to_dict("records"), "sql": sql}
         except Exception as e:
+            if self.backend == "postgres" and self.con is not None:
+                try:
+                    self.con.rollback()
+                except Exception:
+                    pass
             return {"ok": False, "error": str(e), "sql": sql}
 
     def schema_search(self, q, k=10):
