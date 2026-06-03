@@ -198,6 +198,12 @@ source ~/venvs/qwen35/bin/activate
 ./run_real_model_debug_api.sh
 ```
 
+If you are not in the pipeline folder, run it by absolute path:
+
+```bash
+~/fahmai-agi/pipeline-qwen2.5/run_real_model_debug_api.sh
+```
+
 Debug endpoint:
 
 ```bash
@@ -205,6 +211,15 @@ curl -s -X POST http://127.0.0.1:8888/agent/local/debug \
   -H "Content-Type: application/json" \
   -d '{"question":"MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ"}' \
   | python -m json.tool > debug_one_question.json
+```
+
+If `python -m json.tool` says `Expecting value`, inspect the raw HTTP response
+first:
+
+```bash
+curl -i -X POST http://127.0.0.1:8888/agent/local/debug \
+  -H "Content-Type: application/json" \
+  -d '{"question":"MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ"}'
 ```
 
 Response fields:

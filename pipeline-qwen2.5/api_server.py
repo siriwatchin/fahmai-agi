@@ -576,27 +576,31 @@ def _runtime_debug() -> dict[str, Any]:
     }
 
 
-def _make_debug_response(bundle: AnswerBundle, snapshot: dict[str, int]) -> AgentDebugResponse:
+def _make_debug_payload(bundle: AnswerBundle, snapshot: dict[str, int]) -> dict[str, Any]:
     records = _audit_delta(snapshot, bundle.request_uuid)
     guardrail = bundle.observation.get("guardrail") if isinstance(bundle.observation, dict) else None
-    return AgentDebugResponse(
-        id=bundle.request_uuid,
-        qid=bundle.qid,
-        route=bundle.route,
-        question=bundle.question,
-        answer=bundle.answer,
-        total_output_token=bundle.total_output_token,
-        request_seconds=bundle.request_seconds,
-        sources=_extract_sources(bundle.observation, limit=20),
-        guardrail=_safe_debug_obj(guardrail) if isinstance(guardrail, dict) else guardrail,
-        token_usage=_token_usage(records["token_log"], bundle.total_output_token),
-        token_log=_safe_debug_obj(records["token_log"]),
-        llm_audit=_safe_debug_obj(records["llm_audit"]),
-        tool_audit=_safe_debug_obj(records["tool_audit"]),
-        tool_summary=_tool_summary(records["tool_audit"]),
-        runtime=_runtime_debug(),
-        observation=_safe_debug_obj(bundle.observation) if API_DEBUG_INCLUDE_OBSERVATION else None,
-    )
+    payload = {
+        "id": bundle.request_uuid,
+        "qid": bundle.qid,
+        "route": bundle.route,
+        "question": bundle.question,
+        "answer": bundle.answer,
+        "total_output_token": bundle.total_output_token,
+        "request_seconds": bundle.request_seconds,
+        "sources": _extract_sources(bundle.observation, limit=20),
+        "guardrail": _safe_debug_obj(guardrail) if isinstance(guardrail, dict) else guardrail,
+        "token_usage": _token_usage(records["token_log"], bundle.total_output_token),
+        "token_log": _safe_debug_obj(records["token_log"]),
+        "llm_audit": _safe_debug_obj(records["llm_audit"]),
+        "tool_audit": _safe_debug_obj(records["tool_audit"]),
+        "tool_summary": _tool_summary(records["tool_audit"]),
+        "runtime": _runtime_debug(),
+        "observation": _safe_debug_obj(bundle.observation) if API_DEBUG_INCLUDE_OBSERVATION else None,
+    }
+    # Force JSON compatibility before FastAPI serializes the response. Debug
+    # observations may contain timestamps, numpy scalars, or nested objects from
+    # pandas/duckdb/qdrant.
+    return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
 
 
 def _save_api_debug(
@@ -791,12 +795,12 @@ async def agent(req: AgentRequest, request: Request) -> AgentResponse:
     return bundle.response
 
 
-@app.post("/agent/local/debug", response_model=AgentDebugResponse)
-@app.post("/agent/thaillm/debug", response_model=AgentDebugResponse)
-async def agent_debug(req: AgentRequest, request: Request) -> AgentDebugResponse:
+@app.post("/agent/local/debug")
+@app.post("/agent/thaillm/debug")
+async def agent_debug(req: AgentRequest, request: Request) -> dict[str, Any]:
     snapshot = _audit_snapshot()
     bundle = await _answer_request(_norm_question(req.question), req.id, route=request.url.path)
-    return _make_debug_response(bundle, snapshot)
+    return _make_debug_payload(bundle, snapshot)
 
 
 async def _answer_request(question: str, explicit_qid: str | None, route: str) -> AnswerBundle:
