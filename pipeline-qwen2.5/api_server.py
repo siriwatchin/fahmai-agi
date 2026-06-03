@@ -15,7 +15,7 @@ from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 import agentic_best_integrated_qdrant as pipeline
@@ -776,8 +776,8 @@ app = FastAPI(title="FahMai Qwen2.5 Agent API", version="1.2.0", lifespan=lifesp
 
 
 @app.get("/", include_in_schema=False)
-def root() -> RedirectResponse:
-    return RedirectResponse(url="/demo")
+def root() -> HTMLResponse:
+    return demo()
 
 
 @app.get("/demo", response_class=HTMLResponse, include_in_schema=False)

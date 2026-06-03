@@ -491,9 +491,9 @@
         <div>
           <label for="endpoint">Endpoint</label>
           <select id="endpoint">
-            <option value="/api/v2/chat">/api/v2/chat</option>
-            <option value="/agent/local">/agent/local</option>
-            <option value="/agent/thaillm">/agent/thaillm</option>
+            <option value="api/v2/chat">/api/v2/chat</option>
+            <option value="agent/local">/agent/local</option>
+            <option value="agent/thaillm">/agent/thaillm</option>
           </select>
         </div>
 
@@ -625,6 +625,12 @@
       return String(value);
     }
 
+    function apiUrl(path) {
+      const clean = String(path || "").replace(/^\/+/, "");
+      const base = window.location.pathname.endsWith("/") ? window.location.pathname : window.location.pathname.replace(/[^/]*$/, "");
+      return `${base}${clean}`;
+    }
+
     function setHealth(data, error) {
       if (error) {
         els.healthStrip.innerHTML = `<span class="pill"><span class="dot bad"></span><span>api offline</span></span>`;
@@ -644,7 +650,7 @@
 
     async function refreshHealth() {
       try {
-        const res = await fetch("/health");
+        const res = await fetch(apiUrl("health"));
         const data = await res.json();
         setHealth(data);
       } catch (err) {
@@ -653,7 +659,7 @@
     }
 
     function payloadFor(endpoint, question) {
-      if (endpoint.startsWith("/api/")) {
+      if (endpoint.replace(/^\/+/, "").startsWith("api/")) {
         return { data: { question } };
       }
       return { question };
@@ -765,7 +771,7 @@
       els.answer.innerHTML = `<span class="loading"><span class="spinner"></span>กำลังถาม agent</span>`;
 
       try {
-        const res = await fetch(endpoint, {
+        const res = await fetch(apiUrl(endpoint), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payloadFor(endpoint, question))
