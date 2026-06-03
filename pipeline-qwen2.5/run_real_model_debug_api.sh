@@ -54,7 +54,8 @@ export API_DEBUG_INCLUDE_RAW_OBSERVATION="${API_DEBUG_INCLUDE_RAW_OBSERVATION:-0
 export API_DEBUG_STRING_LIMIT="${API_DEBUG_STRING_LIMIT:-2000}"
 export API_DEBUG_LIST_LIMIT="${API_DEBUG_LIST_LIMIT:-80}"
 
-export GUARDRAIL_ENDPOINT="${GUARDRAIL_ENDPOINT:-http://localhost:7777/predictv2}"
+export GUARDRAIL_ENDPOINT="${GUARDRAIL_ENDPOINT:-}"
+export GUARDRAIL_URL="${GUARDRAIL_URL:-}"
 export GUARDRAIL_MAX_LENGTH="${GUARDRAIL_MAX_LENGTH:-2048}"
 export GUARDRAIL_THRESHOLD="${GUARDRAIL_THRESHOLD:-0.75}"
 export GUARDRAIL_ACTION="${GUARDRAIL_ACTION:-audit_only}"
@@ -82,6 +83,7 @@ echo "  debug_sources: $API_INCLUDE_SOURCES"
 echo "  api_v2_debug_response: $API_V2_DEBUG_RESPONSE"
 echo "  debug_observation: $API_DEBUG_INCLUDE_OBSERVATION"
 echo "  guardrail_endpoint: ${GUARDRAIL_ENDPOINT:-disabled}"
+echo "  guardrail_url: ${GUARDRAIL_URL:-disabled}"
 echo "  guardrail_action: $GUARDRAIL_ACTION"
 
 exec uvicorn api_server:app --host 0.0.0.0 --port "$API_PORT"

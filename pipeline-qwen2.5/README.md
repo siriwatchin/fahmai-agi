@@ -323,20 +323,25 @@ source ~/venvs/qwen35/bin/activate
 ./run_guarded_source_api.sh
 ```
 
-This sets:
+This now runs without an external guardrail by default:
 
 ```bash
-GUARDRAIL_ENDPOINT=http://localhost:7777/predictv2
+GUARDRAIL_ENDPOINT=
+GUARDRAIL_URL=
 GUARDRAIL_MAX_LENGTH=2048
 GUARDRAIL_THRESHOLD=0.75
 GUARDRAIL_ACTION=audit_only
 API_INCLUDE_SOURCES=1
 ```
 
-Use `GUARDRAIL_ACTION=reject ./run_guarded_source_api.sh` for stricter
-production blocking. Keep `audit_only` for Kaggle-style prompt-injection
-questions because the grader may expect a defensive business answer rather than
-an immediate hard block.
+If an external classifier is needed later, enable it explicitly:
+
+```bash
+GUARDRAIL_ENDPOINT=http://localhost:7777/predictv2 ./run_guarded_source_api.sh
+```
+
+Keep the default disabled profile for model/CSV scoring runs so the agent can
+produce competition-valid defensive answers for prompt-injection questions.
 
 Score-named copies are available under:
 
@@ -782,13 +787,14 @@ api_tool_summary.json
 `api_tool_audit.jsonl` records every tool-level action with request UUID, route,
 question id, latency, estimated input/output tokens, hashes, and redacted
 previews. `api_tool_summary.json` aggregates call count, seconds, and token
-estimates per tool/action. This includes cache lookup, guardrail, SQL, TF-IDF,
-Qdrant, hybrid RRF, and LLM generation when those paths are used.
+estimates per tool/action. This includes cache lookup, SQL, TF-IDF, Qdrant,
+hybrid RRF, and LLM generation when those paths are used. Guardrail calls appear
+only when an external guardrail endpoint is explicitly enabled.
 
 Guardrail behavior:
 
-- `GUARDRAIL_URL` unset: guardrail disabled.
-- `GUARDRAIL_ENDPOINT=http://localhost:7777/predictv2`: use the local guardrail service on the B200 host. This endpoint receives only `text`, `max_length`, and `threshold`.
+- `GUARDRAIL_ENDPOINT` and `GUARDRAIL_URL` unset: guardrail disabled. This is the default pipeline behavior.
+- `GUARDRAIL_ENDPOINT=http://localhost:7777/predictv2`: optionally use the local guardrail service on the B200 host. This endpoint receives only `text`, `max_length`, and `threshold`.
 - `GUARDRAIL_ENDPOINT=http://swarm-manager.modelharbor.com:54132/predictv2`: optional remote fallback if the B200 host can reach the shared guardrail service.
 - `GUARDRAIL_URL=http://127.0.0.1:8000`: use the older local guardrail shape at `$GUARDRAIL_URL/predict`, including the optional `model` field.
 - `GUARDRAIL_ACTION=audit_only`: log guardrail result but still let the FahMai agent answer. This is best for the competition because prompt-injection questions often need a defensive answer, not a hard block.

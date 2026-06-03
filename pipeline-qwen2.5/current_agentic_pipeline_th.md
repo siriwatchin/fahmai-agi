@@ -278,19 +278,23 @@ API outputs:
 
 `api_requests.jsonl` จะมี `request_uuid`, `route`, และ `total_output_token` สำหรับ request ที่เข้าทาง `/agent/local` หรือ `/agent/thaillm`
 
-## Guardrail API Integration
+## Guardrail API Integration (Optional)
 
-มี guardrail API แยกที่ตรวจ prompt-injection / attack text ได้ตาม spec:
+สถานะปัจจุบัน: pipeline ไม่เปิด external guardrail เป็นค่า default แล้ว เพื่อให้การรัน CSV/API ไม่ผูกกับ service แยกและไม่เสีย latency เพิ่มจาก network call. โค้ดยังรองรับ guardrail แบบ opt-in ถ้าต้องการเปิดเองผ่าน env.
+
+ตัวอย่าง guardrail API แยกที่เคยใช้ตรวจ prompt-injection / attack text:
 
 ```text
 POST http://127.0.0.1:8000/predict
 GET  http://127.0.0.1:8000/health
 ```
 
-pipeline API หลักรองรับ guardrail แล้วผ่าน env:
+ถ้าต้องการเปิด guardrail เอง ให้ตั้ง env ก่อนรัน API:
 
 ```bash
 export GUARDRAIL_URL="http://127.0.0.1:8000"
+# หรือ
+export GUARDRAIL_ENDPOINT="http://localhost:7777/predictv2"
 export GUARDRAIL_MODEL="model"
 export GUARDRAIL_THRESHOLD="0.75"
 export GUARDRAIL_ACTION="audit_only"
