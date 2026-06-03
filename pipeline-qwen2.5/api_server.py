@@ -15,6 +15,7 @@ from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 import agentic_best_integrated_qdrant as pipeline
@@ -46,6 +47,7 @@ GUARDRAIL_ACTION = os.getenv("GUARDRAIL_ACTION", "audit_only").lower()
 GUARDRAIL_FAIL_CLOSED = os.getenv("GUARDRAIL_FAIL_CLOSED", "0").lower() in {"1", "true", "yes"}
 GUARDRAIL_INCLUDE_MODEL_ENV = os.getenv("GUARDRAIL_INCLUDE_MODEL")
 API_INCLUDE_SOURCES = os.getenv("API_INCLUDE_SOURCES", "0").lower() in {"1", "true", "yes"}
+DEMO_UI_PATH = Path(__file__).with_name("web_ui") / "index.html"
 
 
 def _norm_question(text: str) -> str:
@@ -771,6 +773,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FahMai Qwen2.5 Agent API", version="1.2.0", lifespan=lifespan)
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/demo")
+
+
+@app.get("/demo", response_class=HTMLResponse, include_in_schema=False)
+def demo() -> HTMLResponse:
+    if not DEMO_UI_PATH.exists():
+        raise HTTPException(status_code=404, detail="demo UI is missing")
+    return HTMLResponse(DEMO_UI_PATH.read_text(encoding="utf-8"))
 
 
 @app.get("/health")

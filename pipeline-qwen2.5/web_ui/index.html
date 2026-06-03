@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FahMai Agent Console</title>
+  <style>
+    :root {
+      --bg: #0b1114;
+      --panel: #111a1f;
+      --panel-2: #172328;
+      --line: #26383f;
+      --text: #edf6f2;
+      --muted: #94a9a7;
+      --soft: #c8d7d2;
+      --mint: #5ef0b4;
+      --cyan: #71c8ff;
+      --amber: #f2bd61;
+      --red: #ff706e;
+      --ink: #081012;
+      --shadow: 0 18px 48px rgba(0, 0, 0, .34);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      min-height: 100%;
+      margin: 0;
+      background:
+        linear-gradient(135deg, rgba(113, 200, 255, .08), transparent 34%),
+        linear-gradient(225deg, rgba(94, 240, 180, .08), transparent 38%),
+        var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      letter-spacing: 0;
+    }
+
+    button, textarea, select {
+      font: inherit;
+    }
+
+    .topbar {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px clamp(16px, 3vw, 36px);
+      border-bottom: 1px solid var(--line);
+      background: rgba(11, 17, 20, .84);
+      backdrop-filter: blur(14px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 240px;
+    }
+
+    .mark {
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(94, 240, 180, .7);
+      background: #0e191b;
+      box-shadow: inset 0 0 0 1px rgba(113, 200, 255, .2);
+      display: grid;
+      place-items: center;
+      color: var(--mint);
+      font-weight: 900;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(18px, 2vw, 24px);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 5px;
+    }
+
+    .health-strip {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      min-height: 32px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      background: rgba(17, 26, 31, .9);
+      color: var(--soft);
+      padding: 6px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 16px rgba(242, 189, 97, .35);
+    }
+
+    .dot.ok {
+      background: var(--mint);
+      box-shadow: 0 0 16px rgba(94, 240, 180, .5);
+    }
+
+    .dot.bad {
+      background: var(--red);
+      box-shadow: 0 0 16px rgba(255, 112, 110, .45);
+    }
+
+    .shell {
+      width: min(1520px, calc(100vw - 32px));
+      margin: 22px auto 36px;
+      display: grid;
+      grid-template-columns: minmax(340px, 430px) 1fr;
+      gap: 18px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      background: rgba(17, 26, 31, .86);
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }
+
+    .panel-head {
+      min-height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(23, 35, 40, .86);
+    }
+
+    .panel-title {
+      font-size: 13px;
+      color: var(--soft);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .panel-body {
+      padding: 16px;
+    }
+
+    .ask-panel {
+      position: sticky;
+      top: 94px;
+      height: calc(100vh - 118px);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 220px;
+      resize: vertical;
+      border: 1px solid #324850;
+      background: #081012;
+      color: var(--text);
+      padding: 14px;
+      outline: none;
+      line-height: 1.55;
+    }
+
+    textarea:focus, select:focus {
+      border-color: var(--mint);
+      box-shadow: 0 0 0 3px rgba(94, 240, 180, .12);
+    }
+
+    select {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid #324850;
+      background: #081012;
+      color: var(--text);
+      padding: 9px 10px;
+      outline: none;
+      appearance: none;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .sample-grid {
+      display: grid;
+      gap: 8px;
+      max-height: 238px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .sample {
+      width: 100%;
+      border: 1px solid #2c4149;
+      color: var(--soft);
+      background: #0d171a;
+      padding: 10px 11px;
+      text-align: left;
+      cursor: pointer;
+      line-height: 1.35;
+    }
+
+    .sample:hover {
+      border-color: var(--cyan);
+      color: var(--text);
+      background: #102027;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      padding: 16px;
+      border-top: 1px solid var(--line);
+      background: rgba(8, 16, 18, .82);
+    }
+
+    .btn {
+      border: 0;
+      min-height: 46px;
+      padding: 12px 16px;
+      cursor: pointer;
+      color: var(--ink);
+      background: var(--mint);
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .btn:hover {
+      filter: brightness(1.08);
+    }
+
+    .btn:disabled {
+      cursor: not-allowed;
+      opacity: .58;
+    }
+
+    .btn.secondary {
+      min-width: 48px;
+      color: var(--soft);
+      background: #172328;
+      border: 1px solid var(--line);
+    }
+
+    .main {
+      display: grid;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .hero-answer {
+      min-height: 248px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .answer {
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 22px;
+      line-height: 1.78;
+      font-size: clamp(18px, 2.3vw, 28px);
+      color: #f5fbf9;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      background: rgba(23, 35, 40, .78);
+      padding: 14px;
+      min-height: 82px;
+    }
+
+    .metric .value {
+      color: var(--mint);
+      font-size: clamp(20px, 2.2vw, 30px);
+      font-weight: 900;
+      line-height: 1.15;
+      margin-bottom: 6px;
+    }
+
+    .metric .name {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      border: 1px solid #2b4048;
+      background: #0d171a;
+      padding: 12px;
+      min-width: 0;
+    }
+
+    .row-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      color: var(--soft);
+      font-size: 12px;
+    }
+
+    .row-top b {
+      color: var(--cyan);
+      font-weight: 800;
+    }
+
+    .preview {
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.45;
+      font-size: 12px;
+    }
+
+    details {
+      border: 1px solid var(--line);
+      background: rgba(8, 16, 18, .78);
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 14px 16px;
+      color: var(--soft);
+      border-bottom: 1px solid transparent;
+    }
+
+    details[open] summary {
+      border-bottom-color: var(--line);
+    }
+
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      max-height: 520px;
+      color: #d7e7e1;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(520px, calc(100vw - 36px));
+      border: 1px solid var(--line);
+      background: #111a1f;
+      color: var(--soft);
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+      transform: translateY(16px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease;
+      z-index: 50;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .loading {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--amber);
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(242, 189, 97, .25);
+      border-top-color: var(--amber);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .ask-panel {
+        position: static;
+        height: auto;
+      }
+
+      .metrics, .grid-2 {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .health-strip {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark">FM</div>
+      <div>
+        <h1>FahMai Agent Console</h1>
+        <div class="subtitle">PostgreSQL + Qdrant + Local Qwen</div>
+      </div>
+    </div>
+    <div class="health-strip" id="healthStrip">
+      <span class="pill"><span class="dot"></span><span>checking</span></span>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="panel ask-panel">
+      <div class="panel-head">
+        <div class="panel-title">Question</div>
+        <button class="btn secondary" id="healthBtn" type="button" title="Refresh health">H</button>
+      </div>
+      <div class="panel-body stack">
+        <div>
+          <label for="endpoint">Endpoint</label>
+          <select id="endpoint">
+            <option value="/api/v2/chat">/api/v2/chat</option>
+            <option value="/agent/local">/agent/local</option>
+            <option value="/agent/thaillm">/agent/thaillm</option>
+          </select>
+        </div>
+
+        <div>
+          <label for="question">Prompt</label>
+          <textarea id="question">MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ</textarea>
+        </div>
+
+        <div>
+          <label>Samples</label>
+          <div class="sample-grid">
+            <button class="sample" type="button">MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ</button>
+            <button class="sample" type="button">นโยบายการรับประกัน IP68 ครอบคลุมน้ำเข้าไหม</button>
+            <button class="sample" type="button">ในตาราง FACT_SHIPPING รายการขนส่งทั้งหมดของ FahMai ถูกจัดการโดย vendor รายใดบ้าง และส่วนแบ่งเป็นกี่เปอร์เซ็นต์</button>
+            <button class="sample" type="button">ใครเป็น CEO ของ FahMai ณ วันที่ 1 มิถุนายน 2568</button>
+            <button class="sample" type="button">ในปี 2025 ลูกค้า B2B รายไหนจ่ายเงินช้าที่สุด และ late days เป็นเท่าไหร่</button>
+          </div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn" id="askBtn" type="button">Ask Agent</button>
+        <button class="btn secondary" id="clearBtn" type="button" title="Clear output">C</button>
+      </div>
+    </section>
+
+    <section class="main">
+      <section class="panel hero-answer">
+        <div class="panel-head">
+          <div class="panel-title">Answer</div>
+          <div class="pill" id="requestId">id: -</div>
+        </div>
+        <div class="answer" id="answer">
+          <span class="empty">รอคำถามจาก agent</span>
+        </div>
+      </section>
+
+      <section class="metrics">
+        <div class="metric">
+          <div class="value" id="metricTime">-</div>
+          <div class="name">request sec</div>
+        </div>
+        <div class="metric">
+          <div class="value" id="metricOut">-</div>
+          <div class="name">output tokens</div>
+        </div>
+        <div class="metric">
+          <div class="value" id="metricTotal">-</div>
+          <div class="name">llm tokens</div>
+        </div>
+        <div class="metric">
+          <div class="value" id="metricTools">-</div>
+          <div class="name">tool calls</div>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Sources</div>
+            <div class="pill" id="sourceCount">0</div>
+          </div>
+          <div class="panel-body">
+            <div class="list" id="sources"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Tool Audit</div>
+            <div class="pill" id="toolCount">0</div>
+          </div>
+          <div class="panel-body">
+            <div class="list" id="tools"></div>
+          </div>
+        </section>
+      </section>
+
+      <details>
+        <summary>Raw response</summary>
+        <pre id="raw">{}</pre>
+      </details>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const els = {
+      endpoint: document.getElementById("endpoint"),
+      question: document.getElementById("question"),
+      askBtn: document.getElementById("askBtn"),
+      clearBtn: document.getElementById("clearBtn"),
+      healthBtn: document.getElementById("healthBtn"),
+      healthStrip: document.getElementById("healthStrip"),
+      answer: document.getElementById("answer"),
+      requestId: document.getElementById("requestId"),
+      metricTime: document.getElementById("metricTime"),
+      metricOut: document.getElementById("metricOut"),
+      metricTotal: document.getElementById("metricTotal"),
+      metricTools: document.getElementById("metricTools"),
+      sourceCount: document.getElementById("sourceCount"),
+      toolCount: document.getElementById("toolCount"),
+      sources: document.getElementById("sources"),
+      tools: document.getElementById("tools"),
+      raw: document.getElementById("raw"),
+      toast: document.getElementById("toast")
+    };
+
+    const samples = document.querySelectorAll(".sample");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function showToast(message) {
+      els.toast.textContent = message;
+      els.toast.classList.add("show");
+      setTimeout(() => els.toast.classList.remove("show"), 2600);
+    }
+
+    function compact(value) {
+      if (value === null || value === undefined || value === "") return "-";
+      if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(3);
+      return String(value);
+    }
+
+    function setHealth(data, error) {
+      if (error) {
+        els.healthStrip.innerHTML = `<span class="pill"><span class="dot bad"></span><span>api offline</span></span>`;
+        return;
+      }
+      const ok = data && data.ok;
+      const items = [
+        [ok ? "ok" : "bad", ok ? "api ready" : "api loading"],
+        [data?.sql_backend === "postgres" ? "ok" : "", `sql: ${escapeHtml(data?.sql_backend ?? "-")}`],
+        [data?.qdrant_enabled ? "ok" : "", `qdrant: ${data?.qdrant_enabled ? "on" : "off"}`],
+        [data?.api_v2_debug_response ? "ok" : "", `debug: ${data?.api_v2_debug_response ? "on" : "off"}`],
+      ];
+      els.healthStrip.innerHTML = items.map(([cls, label]) => (
+        `<span class="pill"><span class="dot ${cls}"></span><span>${label}</span></span>`
+      )).join("");
+    }
+
+    async function refreshHealth() {
+      try {
+        const res = await fetch("/health");
+        const data = await res.json();
+        setHealth(data);
+      } catch (err) {
+        setHealth(null, err);
+      }
+    }
+
+    function payloadFor(endpoint, question) {
+      if (endpoint.startsWith("/api/")) {
+        return { data: { question } };
+      }
+      return { question };
+    }
+
+    function answerFrom(data) {
+      return data?.answer ?? data?.data?.answer ?? "";
+    }
+
+    function tokenUsageFrom(data) {
+      return data?.token_usage ?? {};
+    }
+
+    function sourcesFrom(data) {
+      return Array.isArray(data?.sources) ? data.sources : [];
+    }
+
+    function toolSummaryFrom(data) {
+      return data?.tool_summary ?? {};
+    }
+
+    function renderSources(items) {
+      els.sourceCount.textContent = String(items.length);
+      if (!items.length) {
+        els.sources.innerHTML = `<div class="row"><div class="preview">No sources returned for this route.</div></div>`;
+        return;
+      }
+      els.sources.innerHTML = items.map((src, index) => {
+        const title = src.type || src.source || `source ${index + 1}`;
+        const tag = src.backend || src.doc_type || src.query_hash || "";
+        const preview = src.preview || src.text || JSON.stringify(src, null, 2);
+        return `
+          <div class="row">
+            <div class="row-top"><b>${escapeHtml(title)}</b><span>${escapeHtml(tag)}</span></div>
+            <div class="preview">${escapeHtml(preview)}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderTools(summary, audit) {
+      const byTool = summary.by_tool || {};
+      const entries = Object.entries(byTool);
+      const total = summary.total_tool_calls ?? (Array.isArray(audit) ? audit.length : entries.length);
+      els.toolCount.textContent = String(total || 0);
+      if (!entries.length && Array.isArray(audit) && audit.length) {
+        els.tools.innerHTML = audit.slice(0, 12).map((rec) => `
+          <div class="row">
+            <div class="row-top"><b>${escapeHtml(rec.tool || "tool")}</b><span>${escapeHtml(rec.action || "")}</span></div>
+            <div class="preview">ok=${escapeHtml(rec.ok)} · sec=${escapeHtml(compact(rec.seconds))} · tokens=${escapeHtml(compact(rec.total_tokens_estimate))}</div>
+          </div>
+        `).join("");
+        return;
+      }
+      if (!entries.length) {
+        els.tools.innerHTML = `<div class="row"><div class="preview">No tool calls recorded yet.</div></div>`;
+        return;
+      }
+      els.tools.innerHTML = entries.map(([name, item]) => `
+        <div class="row">
+          <div class="row-top"><b>${escapeHtml(name)}</b><span>${escapeHtml(`${item.ok_calls ?? 0}/${item.calls ?? 0} ok`)}</span></div>
+          <div class="preview">sec=${escapeHtml(compact(item.seconds))} · tokens≈${escapeHtml(compact(item.total_tokens_estimate))}</div>
+        </div>
+      `).join("");
+    }
+
+    function renderData(data, elapsed) {
+      const answer = answerFrom(data);
+      const usage = tokenUsageFrom(data);
+      const sources = sourcesFrom(data);
+      const summary = toolSummaryFrom(data);
+
+      els.answer.textContent = answer || "No answer field in response.";
+      els.requestId.textContent = `id: ${data?.id ?? "-"}`;
+      els.metricTime.textContent = compact(data?.request_seconds ?? elapsed);
+      els.metricOut.textContent = compact(data?.total_output_token ?? usage.total_output_token);
+      els.metricTotal.textContent = compact(usage.total_tokens ?? 0);
+      els.metricTools.textContent = compact(summary.total_tool_calls ?? data?.tool_audit?.length ?? 0);
+      renderSources(sources);
+      renderTools(summary, data?.tool_audit);
+      els.raw.textContent = JSON.stringify(data, null, 2);
+    }
+
+    function clearOutput() {
+      els.answer.innerHTML = `<span class="empty">รอคำถามจาก agent</span>`;
+      els.requestId.textContent = "id: -";
+      els.metricTime.textContent = "-";
+      els.metricOut.textContent = "-";
+      els.metricTotal.textContent = "-";
+      els.metricTools.textContent = "-";
+      els.sourceCount.textContent = "0";
+      els.toolCount.textContent = "0";
+      els.sources.innerHTML = "";
+      els.tools.innerHTML = "";
+      els.raw.textContent = "{}";
+    }
+
+    async function ask() {
+      const endpoint = els.endpoint.value;
+      const question = els.question.value.trim();
+      if (!question) {
+        showToast("ใส่คำถามก่อน");
+        return;
+      }
+
+      const started = performance.now();
+      els.askBtn.disabled = true;
+      els.askBtn.innerHTML = `<span class="loading"><span class="spinner"></span>Running</span>`;
+      els.answer.innerHTML = `<span class="loading"><span class="spinner"></span>กำลังถาม agent</span>`;
+
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payloadFor(endpoint, question))
+        });
+        const text = await res.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { answer: text, status: res.status };
+        }
+        if (!res.ok) {
+          throw new Error(data.detail || text || `HTTP ${res.status}`);
+        }
+        const elapsed = (performance.now() - started) / 1000;
+        renderData(data, elapsed);
+        refreshHealth();
+      } catch (err) {
+        els.answer.textContent = `Error: ${err.message || err}`;
+        showToast("request failed");
+      } finally {
+        els.askBtn.disabled = false;
+        els.askBtn.textContent = "Ask Agent";
+      }
+    }
+
+    samples.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        els.question.value = btn.textContent.trim();
+        els.question.focus();
+      });
+    });
+
+    els.askBtn.addEventListener("click", ask);
+    els.clearBtn.addEventListener("click", clearOutput);
+    els.healthBtn.addEventListener("click", refreshHealth);
+    els.question.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        ask();
+      }
+    });
+
+    clearOutput();
+    refreshHealth();
+  </script>
+</body>
+</html>

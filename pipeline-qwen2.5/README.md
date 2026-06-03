@@ -814,3 +814,26 @@ Response:
   }
 }
 ```
+
+### Demo Web UI
+
+The API also serves a lightweight demo console at:
+
+```text
+http://127.0.0.1:8888/demo
+```
+
+Run the same production/debug API command, then open `/demo` in a browser. The
+page calls `/api/v2/chat` by default and shows:
+
+- answer
+- request UUID
+- output token count
+- request latency
+- sources
+- token usage
+- tool audit summary
+- raw JSON response
+
+For a public machine or shared demo URL, use the B200 host/IP instead of
+`127.0.0.1` while keeping the same port and path.
